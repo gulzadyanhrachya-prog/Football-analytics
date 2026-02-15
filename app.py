@@ -3,7 +3,8 @@ import pandas as pd
 import requests
 from datetime import datetime
 
-# --- KONFIGURACE ---\nif "APISPORTS_KEY" in st.secrets:
+# --- KONFIGURACE ---
+if "APISPORTS_KEY" in st.secrets:
     API_KEY = st.secrets["APISPORTS_KEY"]
 else:
     st.error("Chybí APISPORTS_KEY v Secrets!")
@@ -14,7 +15,8 @@ HEADERS = {'x-apisports-key': API_KEY}
 
 st.set_page_config(page_title="Betting Master Diagnostic", layout="wide")
 
-# --- DEFINICE LIG ---\nLIGY = {
+# --- DEFINICE LIG ---
+LIGY = {
     "🇬🇧 Premier League (Anglie 1)": 39,
     "🇬🇧 Championship (Anglie 2)": 40,
     "🇨🇿 Fortuna Liga (Česko 1)": 345,
@@ -25,22 +27,24 @@ st.set_page_config(page_title="Betting Master Diagnostic", layout="wide")
     "🇪🇺 Liga Mistrů": 2
 }
 
-# --- POMOCNÉ FUNKCE ---\ndef format_formy(forma_str):
+# --- POMOCNÉ FUNKCE ---
+def format_formy(forma_str):
     if not forma_str: return ""
     mapping = {"W": "🟢", "D": "⚪", "L": "🔴"}
     return "".join([mapping.get(char, "❓") for char in forma_str])
 
-# --- SIDEBAR ---\nst.sidebar.title("Nastavení")
+# --- SIDEBAR ---
+st.sidebar.title("Nastavení")
 vybrana_liga_nazev = st.sidebar.selectbox("Soutěž:", list(LIGY.keys()))
 LIGA_ID = LIGY[vybrana_liga_nazev]
 
-# Změnil jsem výchozí index na 2023, protože tam data určitě jsou
+# Výběr sezóny
 vybrana_sezona = st.sidebar.selectbox("Sezóna (Rok startu):", [2025, 2024, 2023], index=2)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🛠️ Diagnostika API")
 
-# --- NAČÍTÁNÍ DAT S DIAGNOSTIKOU ---\n# Zrušil jsem cache, abychom viděli aktuální chybu hned
+# --- NAČÍTÁNÍ DAT S DIAGNOSTIKOU ---
 def nacti_tabulku(liga_id, sezona):
     url = f"{URL_BASE}/standings"
     querystring = {"season": str(sezona), "league": str(liga_id)}
@@ -114,7 +118,8 @@ def nacti_zapasy(liga_id, sezona):
     except:
         return []
 
-# --- UI APLIKACE ---\nst.title(f"⚽ {vybrana_liga_nazev}")
+# --- UI APLIKACE ---
+st.title(f"⚽ {vybrana_liga_nazev}")
 st.caption(f"Sezóna: {vybrana_sezona}/{vybrana_sezona+1}")
 
 with st.spinner("Komunikuji se serverem..."):
@@ -140,6 +145,8 @@ else:
                 
                 with st.container():
                     c1, c2, c3, c4, c5 = st.columns([1, 3, 2, 3, 1])
+                    
+                    # Zobrazíme data jen pokud máme info o obou týmech
                     if info_d and info_h:
                         sila_d = info_d['sila'] + 15
                         sila_h = info_h['sila']
@@ -148,13 +155,21 @@ else:
                         proc_d = (sila_d / celkova) * 100
                         proc_h = (sila_h / celkova) * 100
                         
-                        with c2: st.write(f"**{domaci}**"); st.caption(info_d['forma_visual'])
+                        with c2: 
+                            st.image(info_d['logo'], width=30)
+                            st.write(f"**{domaci}**")
+                            st.caption(info_d['forma_visual'])
                         with c3: 
                             st.write(f"*{datum}*")
                             st.markdown(f"#### {int(proc_d)}% : {int(proc_h)}%")
-                        with c4: st.write(f"**{hoste}**"); st.caption(info_h['forma_visual'])
+                        with c4: 
+                            st.image(info_h['logo'], width=30)
+                            st.write(f"**{hoste}**")
+                            st.caption(info_h['forma_visual'])
                     else:
+                        # Fallback pokud nemáme data o týmech
                         with c3: st.write(f"{domaci} vs {hoste}")
+                    
                     st.markdown("---")
 
     with tab2:
