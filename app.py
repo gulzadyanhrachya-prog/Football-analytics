@@ -4,25 +4,19 @@ import requests
 from datetime import datetime
 
 # --- KONFIGURACE ---
-# Hledáme klíč APISPORTS_KEY (pro API-Football)
 if "APISPORTS_KEY" in st.secrets:
     API_KEY = st.secrets["APISPORTS_KEY"]
 else:
-    st.error("Chybí APISPORTS_KEY v Secrets! Zaregistruj se na dashboard.api-football.com a vlož klíč.")
+    st.error("Chybí APISPORTS_KEY v Secrets!")
     st.stop()
 
-# --- ADRESA A HLAVIČKY ---
 URL_BASE = "https://v3.football.api-sports.io"
-HEADERS = {
-    'x-apisports-key': API_KEY
-}
-
-# Aktuální sezóna (většina lig se hraje 2023/2024, takže pro API je to 2023)
+HEADERS = {'x-apisports-key': API_KEY}
 SEZONA = 2023 
 
-st.set_page_config(page_title="Betting Master", layout="wide")
+st.set_page_config(page_title="Betting Master v2", layout="wide")
 
-# --- DEFINICE LIG (ID z API-Football) ---
+# --- DEFINICE LIG ---
 LIGY = {
     "🇨🇿 Fortuna Liga (Česko 1)": 345,
     "🇬🇧 Premier League (Anglie 1)": 39,
@@ -40,15 +34,20 @@ LIGY = {
     "🇪🇺 Liga Mistrů": 2
 }
 
+# --- POMOCNÉ FUNKCE ---
+def format_formy(forma_str):
+    """Převede 'WWLD' na barevné kuličky"""
+    if not forma_str: return ""
+    mapping = {"W": "🟢", "D": "⚪", "L": "🔴"}
+    return "".join([mapping.get(char, "❓") for char in forma_str])
+
 # --- SIDEBAR ---
 st.sidebar.title("Výběr Soutěže")
 vybrana_liga_nazev = st.sidebar.selectbox("Liga:", list(LIGY.keys()))
 LIGA_ID = LIGY[vybrana_liga_nazev]
+st.sidebar.info(f"Limit API: 100 požadavků/den.")
 
-st.sidebar.info(f"Limit API: 100 požadavků/den. Data se ukládají do paměti na 1 hodinu.")
-
-# --- FUNKCE ---
-
+# --- NAČÍTÁNÍ DAT ---
 @st.cache_data(ttl=3600)
 def nacti_tabulku(liga_id):
     url = f"{URL_BASE}/standings"
@@ -56,135 +55,152 @@ def nacti_tabulku(liga_id):
     
     try:
         response = requests.get(url, headers=HEADERS, params=querystring)
-        
-        if response.status_code != 200:
-            return None
-            
         data = response.json()
         
-        # Kontrola, zda API vrátilo data
-        if not data['response']:
-            return None
+        if not data['response']: return None
 
         standings = data['response'][0]['league']['standings'][0]
         
         tymy_info = {}
+        seznam_tymu = [] # Pro zobrazení tabulky
+        
         for radek in standings:
             tym_nazev = radek['team']['name']
-            tym_id = radek['team']['id']
             logo = radek['team']['logo']
             body = radek['points']
+            skore_plus = radek['all']['goals']['for']
+            skore_minus = radek['all']['goals']['against']
+            rozdil_skore = radek['goalsDiff']
             forma = radek['form'] 
             
-            if forma:
-                bonus = forma.count("W") * 3 + forma.count("D") * 1
-            else:
-                bonus = 0
-                forma = "?"
+            # --- NOVÝ ALGORITMUS SÍLY ---
+            # 1. Základ jsou body
+            # 2. Bonus za formu (W=3, D=1)
+            # 3. Bonus za skóre (Rozdíl skóre / 2) -> Tým co vyhrává 5:0 je silnější
             
-            sila = body + bonus
+            bonus_formy = 0
+            if forma:
+                bonus_formy = forma.count("W") * 3 + forma.count("D") * 1
+            
+            sila = body + bonus_formy + (rozdil_skore / 2)
             
             tymy_info[tym_nazev] = {
-                "id": tym_id,
                 "sila": sila,
                 "logo": logo,
-                "forma": forma,
-                "pozice": radek['rank']
+                "forma_raw": forma,
+                "forma_visual": format_formy(forma),
+                "pozice": radek['rank'],
+                "skore": f"{skore_plus}:{skore_minus}"
             }
-        return tymy_info
+            
+            seznam_tymu.append({
+                "Pozice": radek['rank'],
+                "Tým": tym_nazev,
+                "Body": body,
+                "Skóre": f"{skore_plus}:{skore_minus}",
+                "Rozdíl": rozdil_skore,
+                "Forma": format_formy(forma)
+            })
+            
+        return tymy_info, pd.DataFrame(seznam_tymu)
         
     except Exception as e:
-        return None
+        return None, None
 
 @st.cache_data(ttl=3600)
 def nacti_zapasy(liga_id):
     url = f"{URL_BASE}/fixtures"
-    # Stáhneme "next 10" zápasů pro danou ligu
     querystring = {"season": str(SEZONA), "league": str(liga_id), "next": "10"}
-    
     try:
         response = requests.get(url, headers=HEADERS, params=querystring)
-        data = response.json()
-        return data['response']
+        return response.json()['response']
     except:
         return []
 
 # --- UI APLIKACE ---
-
 st.title(f"⚽ {vybrana_liga_nazev}")
-st.markdown("---")
 
-# 1. Načtení dat o týmech
-with st.spinner("Stahuji tabulku a statistiky..."):
-    tymy_db = nacti_tabulku(LIGA_ID)
+# 1. Načtení dat
+with st.spinner("Analyzuji statistiky..."):
+    tymy_db, df_tabulka = nacti_tabulku(LIGA_ID)
 
 if not tymy_db:
-    st.warning("Nepodařilo se načíst tabulku. Možné příčiny:")
-    st.write("1. Pro tuto ligu ještě nezačala sezóna 2023/24.")
-    st.write("2. Došel denní limit (100 volání).")
-    st.write("3. Chyba v API klíči (zkontroluj Secrets).")
+    st.warning("Nepodařilo se načíst data. Zkontroluj sezónu nebo limity.")
     st.stop()
 
-# 2. Načtení zápasů
-zapasy = nacti_zapasy(LIGA_ID)
+# TABS - Rozdělení na Predikce a Tabulku
+tab1, tab2 = st.tabs(["🔮 Predikce & Kurzy", "📊 Tabulka Ligy"])
 
-if not zapasy:
-    st.info("Žádné naplánované zápasy v nejbližší době.")
-else:
-    st.subheader("📅 Predikce na nadcházející zápasy")
+with tab1:
+    zapasy = nacti_zapasy(LIGA_ID)
     
-    for zapas in zapasy:
-        domaci_nazev = zapas['teams']['home']['name']
-        hoste_nazev = zapas['teams']['away']['name']
-        datum_raw = zapas['fixture']['date']
-        datum = datetime.fromisoformat(datum_raw.replace("Z", "+00:00")).strftime("%d.%m. %H:%M")
+    if not zapasy:
+        st.info("Žádné naplánované zápasy.")
+    else:
+        st.write(f"Nalezeno {len(zapasy)} nadcházejících zápasů:")
         
-        logo_domaci = zapas['teams']['home']['logo']
-        logo_hoste = zapas['teams']['away']['logo']
+        for zapas in zapasy:
+            domaci = zapas['teams']['home']['name']
+            hoste = zapas['teams']['away']['name']
+            datum = datetime.fromisoformat(zapas['fixture']['date'].replace("Z", "+00:00")).strftime("%d.%m. %H:%M")
+            
+            info_d = tymy_db.get(domaci)
+            info_h = tymy_db.get(hoste)
+            
+            if info_d and info_h:
+                # Výpočet šancí
+                sila_d = info_d['sila'] + 15 # Domácí výhoda
+                sila_h = info_h['sila']
+                celkova = sila_d + sila_h
+                if celkova == 0: celkova = 1
+                
+                proc_d = (sila_d / celkova) * 100
+                proc_h = (sila_h / celkova) * 100
+                
+                # Kurzy
+                try:
+                    kurz_d = 100 / proc_d
+                    kurz_h = 100 / proc_h
+                except:
+                    kurz_d = 0; kurz_h = 0
 
-        info_domaci = tymy_db.get(domaci_nazev)
-        info_hoste = tymy_db.get(hoste_nazev)
-        
-        if info_domaci and info_hoste:
-            sila_d = info_domaci['sila'] + 15 
-            sila_h = info_hoste['sila']
-            
-            celkova = sila_d + sila_h
-            if celkova == 0: celkova = 1
-            
-            proc_d = (sila_d / celkova) * 100
-            proc_h = (sila_h / celkova) * 100
-            
-            try:
-                kurz_d = 100 / proc_d
-                kurz_h = 100 / proc_h
-            except:
-                kurz_d = 0
-                kurz_h = 0
+                # KARTA ZÁPASU
+                with st.container():
+                    c1, c2, c3, c4, c5 = st.columns([1, 3, 2, 3, 1])
+                    
+                    with c2:
+                        st.image(info_d['logo'], width=40)
+                        st.write(f"**{domaci}**")
+                        st.caption(f"#{info_d['pozice']} | {info_d['forma_visual']}")
+                    
+                    with c3:
+                        st.write(f"*{datum}*")
+                        st.markdown(f"#### {int(proc_d)}% : {int(proc_h)}%")
+                        
+                        # Logika tipu
+                        if proc_d > 60: 
+                            st.success(f"Tip: {domaci}")
+                        elif proc_h > 60: 
+                            st.error(f"Tip: {hoste}")
+                        else: 
+                            st.warning("Tip: Remíza / Risk")
+                            
+                    with c4:
+                        st.image(info_h['logo'], width=40)
+                        st.write(f"**{hoste}**")
+                        st.caption(f"#{info_h['pozice']} | {info_h['forma_visual']}")
+                    
+                    with st.expander("💰 Detailní analýza a kurzy"):
+                        k1, k2, k3 = st.columns(3)
+                        k1.metric("Férový kurz (1)", f"{kurz_d:.2f}")
+                        k2.metric("Férový kurz (2)", f"{kurz_h:.2f}")
+                        k3.metric("Rozdíl síly", f"{int(sila_d - sila_h)}")
+                        
+                        st.write("**Srovnání skóre:**")
+                        st.write(f"{domaci}: {info_d['skore']}")
+                        st.write(f"{hoste}: {info_h['skore']}")
+                    
+                    st.markdown("---")
 
-            with st.container():
-                c1, c2, c3, c4, c5 = st.columns([1, 3, 2, 3, 1])
-                
-                with c2:
-                    st.image(logo_domaci, width=40)
-                    st.write(f"**{domaci_nazev}**")
-                    st.caption(f"#{info_domaci['pozice']} | {info_domaci['forma']}")
-                
-                with c3:
-                    st.write(f"*{datum}*")
-                    st.markdown(f"#### {int(proc_d)}% : {int(proc_h)}%")
-                    if proc_d > 55: st.success(f"Tip: {domaci_nazev}")
-                    elif proc_h > 55: st.error(f"Tip: {hoste_nazev}")
-                    else: st.warning("Vyrovnané")
-                
-                with c4:
-                    st.image(logo_hoste, width=40)
-                    st.write(f"**{hoste_nazev}**")
-                    st.caption(f"#{info_hoste['pozice']} | {info_hoste['forma']}")
-                
-                with st.expander("📊 Detailní kurzy"):
-                    k1, k2 = st.columns(2)
-                    k1.metric("Férový kurz Domácí", f"{kurz_d:.2f}")
-                    k2.metric("Férový kurz Hosté", f"{kurz_h:.2f}")
-                
-                st.markdown("---")
+with tab2:
+    st.dataframe(df_tabulka, hide_index=True, use_container_width=True)
