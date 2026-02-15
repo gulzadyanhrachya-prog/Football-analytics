@@ -3,28 +3,26 @@ import pandas as pd
 import requests
 from datetime import datetime
 
-# --- KONFIGURACE ---\n# Změna: Hledáme nový klíč APISPORTS_KEY
+# --- KONFIGURACE ---
+# Hledáme klíč APISPORTS_KEY (pro API-Football)
 if "APISPORTS_KEY" in st.secrets:
     API_KEY = st.secrets["APISPORTS_KEY"]
 else:
-    st.error("Chybí APISPORTS_KEY v Secrets!")
+    st.error("Chybí APISPORTS_KEY v Secrets! Zaregistruj se na dashboard.api-football.com a vlož klíč.")
     st.stop()
 
-# --- ZMĚNA ADRESY PRO PŘÍMÝ PŘÍSTUP ---
+# --- ADRESA A HLAVIČKY ---
 URL_BASE = "https://v3.football.api-sports.io"
-
-# --- ZMĚNA HLAVIČKY ---
 HEADERS = {
     'x-apisports-key': API_KEY
 }
 
-# Aktuální sezóna
+# Aktuální sezóna (většina lig se hraje 2023/2024, takže pro API je to 2023)
 SEZONA = 2023 
 
 st.set_page_config(page_title="Betting Master", layout="wide")
 
-# --- DEFINICE LIG ---
-# Zde jsou ID lig. Můžeš si přidat další podle dokumentace API-Football.
+# --- DEFINICE LIG (ID z API-Football) ---
 LIGY = {
     "🇨🇿 Fortuna Liga (Česko 1)": 345,
     "🇬🇧 Premier League (Anglie 1)": 39,
@@ -59,20 +57,19 @@ def nacti_tabulku(liga_id):
     try:
         response = requests.get(url, headers=HEADERS, params=querystring)
         
-        # Diagnostika pro případ chyby
         if response.status_code != 200:
-            st.error(f"Chyba API: {response.status_code}")
             return None
             
         data = response.json()
         
-        # Kontrola, zda API vrátilo data (občas vrátí prázdný seznam, pokud nemáš práva)
+        # Kontrola, zda API vrátilo data
         if not data['response']:
             return None
 
         standings = data['response'][0]['league']['standings'][0]
         
-        tymy_info = {}\n        for radek in standings:
+        tymy_info = {}
+        for radek in standings:
             tym_nazev = radek['team']['name']
             tym_id = radek['team']['id']
             logo = radek['team']['logo']
@@ -102,6 +99,7 @@ def nacti_tabulku(liga_id):
 @st.cache_data(ttl=3600)
 def nacti_zapasy(liga_id):
     url = f"{URL_BASE}/fixtures"
+    # Stáhneme "next 10" zápasů pro danou ligu
     querystring = {"season": str(SEZONA), "league": str(liga_id), "next": "10"}
     
     try:
@@ -122,9 +120,9 @@ with st.spinner("Stahuji tabulku a statistiky..."):
 
 if not tymy_db:
     st.warning("Nepodařilo se načíst tabulku. Možné příčiny:")
-    st.write("1. Pro tuto ligu ještě nezačala sezóna 2023.")
+    st.write("1. Pro tuto ligu ještě nezačala sezóna 2023/24.")
     st.write("2. Došel denní limit (100 volání).")
-    st.write("3. Chyba v API klíči.")
+    st.write("3. Chyba v API klíči (zkontroluj Secrets).")
     st.stop()
 
 # 2. Načtení zápasů
