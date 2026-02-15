@@ -7,11 +7,10 @@ from datetime import datetime
 st.set_page_config(page_title="Hybrid Analyzer Debug", layout="wide")
 
 # --- KONFIGURACE ZDROJŮ DAT ---
-# Pro novou sezónu 2024/2025 se odkazy mohou měnit. 
-# Zkoušíme odkazy pro nadcházející sezónu (start podzim 2024).
+# Odkazy na CSV soubory
 LIGY_CONFIG = {
     "🇬🇧 Premier League": {
-        "history": "https://www.football-data.co.uk/mmz4281/2324/E0.csv", # Zatím bereme data z minulé sezóny pro formu
+        "history": "https://www.football-data.co.uk/mmz4281/2324/E0.csv",
         "future": "https://fixturedownload.com/download/epl-2024-GMTStandardTime.csv"
     },
     "🇬🇧 Championship": {
@@ -77,7 +76,6 @@ def nacti_data(liga_nazev):
     try:
         r_fut = requests.get(urls["future"])
         if r_fut.status_code == 200:
-            # Zkusíme různé kódování, občas je to UTF-8, občas Latin-1
             try:
                 df_fut = pd.read_csv(io.StringIO(r_fut.text))
             except:
@@ -113,7 +111,7 @@ def analyzuj_silu(df_hist):
             tymy[hoste]["Forma"].append("L")
         elif vysledek == 'A':
             tymy[hoste]["Body"] += 3
-            tymy[hoste]["Forma"].append("W")\
+            tymy[hoste]["Forma"].append("W")
             tymy[domaci]["Forma"].append("L")
         else:
             tymy[domaci]["Body"] += 1
@@ -144,22 +142,20 @@ zobrazit_raw = st.sidebar.checkbox("Zobrazit surová data (Debug)", value=True)
 
 # Načtení dat
 with st.spinner("Stahuji data..."):
-    df_hist, df_fut, error = nacti_data(vybrana_liga), None, None
-    df_hist, df_fut = df_hist # Rozbalení tuple
+    df_hist, df_fut = nacti_data(vybrana_liga)
 
 # 1. Analýza historie
 db_sily = analyzuj_silu(df_hist)
 
 # 2. Zpracování budoucnosti
 if df_fut is not None:
-    # DIAGNOSTIKA: Zobrazíme surová data, pokud je zaškrtnuto
+    # DIAGNOSTIKA: Zobrazíme surová data
     if zobrazit_raw:
         st.subheader("🛠️ Diagnostika: Surová data z rozpisu")
         st.write(f"Počet řádků v souboru: {len(df_fut)}")
         st.dataframe(df_fut.head())
 
-    # Pokus o převod data - vylepšený
-    # Zkusíme najít sloupec s datem
+    # Pokus o převod data
     col_date = None
     for c in df_fut.columns:
         if "Date" in c or "Time" in c:
@@ -167,29 +163,22 @@ if df_fut is not None:
             break
             
     if col_date:
-        # Převedeme na datetime, ignorujeme chyby (coerce)
         df_fut['DateObj'] = pd.to_datetime(df_fut[col_date], dayfirst=True, errors='coerce')
-        
-        # Pokud to selhalo, zkusíme jiný formát
         if df_fut['DateObj'].isnull().all():
              df_fut['DateObj'] = pd.to_datetime(df_fut[col_date], errors='coerce')
 
         dnes = datetime.now()
-        
-        # Filtr: Zápasy od dneška dál
         budouci_zapasy = df_fut[df_fut['DateObj'] >= dnes].sort_values(by='DateObj')
         
         if budouci_zapasy.empty:
             st.warning("⚠️ Soubor s rozpisem existuje, ale neobsahuje žádné zápasy s datem v budoucnosti.")
             st.write(f"Dnešní datum: {dnes}")
-            st.write("Poslední datum v souboru:")
             if not df_fut['DateObj'].isnull().all():
-                st.write(df_fut['DateObj'].max())
+                st.write(f"Poslední datum v souboru: {df_fut['DateObj'].max()}")
         else:
             st.subheader(f"🔮 Predikce: {vybrana_liga}")
             
             for index, row in budouci_zapasy.head(10).iterrows():
-                # Dynamické hledání sloupců pro týmy
                 col_home = [c for c in df_fut.columns if "Home" in c][0]
                 col_away = [c for c in df_fut.columns if "Away" in c][0]
                 
@@ -238,13 +227,13 @@ if df_fut is not None:
                     else:
                         with c2: 
                             st.write(f"{domaci_raw} vs {hoste_raw}")
-                            st.caption("Chybí historická data (konec sezóny nebo rozdílné názvy)")
+                            st.caption("Chybí historická data")
                     
                     st.markdown("---")
     else:
         st.error("Nepodařilo se najít sloupec s datem v souboru rozpisu.")
 else:
-    st.error("Nepodařilo se stáhnout soubor s rozpisem (možná ještě není vytvořen pro novou sezónu).")
+    st.error("Nepodařilo se stáhnout soubor s rozpisem.")
 
 with st.expander("📊 Tabulka formy (Historie)"):
     df_tabulka = pd.DataFrame.from_dict(db_sily, orient='index').sort_values(by='body', ascending=False)
