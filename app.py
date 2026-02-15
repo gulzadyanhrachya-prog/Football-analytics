@@ -4,85 +4,70 @@ import requests
 import io
 from datetime import datetime, timedelta
 
-st.set_page_config(page_title="Sport Betting Hub v5", layout="wide")
+st.set_page_config(page_title="Global Betting Hub", layout="wide")
 
 # ==========================================
-# 1. MODUL: FOTBAL (S Fallbackem)
+# 1. MODUL: FOTBAL (Rozšířený)
 # ==========================================
 
 def app_fotbal():
-    st.header("⚽ Fotbalový Expert")
-    st.caption("Data: Historie (Football-Data.co.uk) + Budoucnost (FixtureDownload.com)")
+    st.header("⚽ Fotbalový Svět")
+    st.caption("Data: Football-Data.co.uk (Top ligy) + FixtureDownload.com (Ostatní)")
     
-    # --- KONFIGURACE ---
+    # --- KONFIGURACE LIG ---
+    # hist = kód pro historii (pokud existuje), fut = slug pro budoucnost
     LIGY_KODY = {
         "🇬🇧 Premier League": {"hist": "E0", "fut": "epl"},
         "🇬🇧 Championship": {"hist": "E1", "fut": "championship"},
         "🇩🇪 Bundesliga": {"hist": "D1", "fut": "bundesliga"},
         "🇪🇸 La Liga": {"hist": "SP1", "fut": "la-liga"},
         "🇮🇹 Serie A": {"hist": "I1", "fut": "serie-a"},
-        "🇫🇷 Ligue 1": {"hist": "F1", "fut": "ligue-1"}
+        "🇫🇷 Ligue 1": {"hist": "F1", "fut": "ligue-1"},
+        "🇵🇹 Primeira Liga (Portugalsko)": {"hist": "P1", "fut": "primeira-liga"},
+        "🇬🇷 Super League (Řecko)": {"hist": "G1", "fut": "super-league"},
+        "🇹🇷 Süper Lig (Turecko)": {"hist": "T1", "fut": "super-lig"},
+        "🇳🇱 Eredivisie (Holandsko)": {"hist": "N1", "fut": "eredivisie"},
+        "🇧🇪 Jupiler League (Belgie)": {"hist": "B1", "fut": "jupiler-league"},
+        # Ligy, kde je historie obtížná, ale budoucnost půjde:
+        "🇵🇱 Ekstraklasa (Polsko)": {"hist": "POL", "fut": "ekstraklasa"},
+        "🇩🇰 Superliga (Dánsko)": {"hist": "DNK", "fut": "superliga"},
+        "🇷🇴 Liga I (Rumunsko)": {"hist": "ROU", "fut": "liga-i"},
+        "🇧🇬 First League (Bulharsko)": {"hist": "BUL", "fut": "first-professional-football-league"},
+        "🇮🇱 Premier League (Izrael)": {"hist": "ISR", "fut": "ligat-haal"},
     }
 
-    # Masivní překladač jmen pro spárování historie a budoucnosti
     def normalizuj_nazev(nazev):
         if not isinstance(nazev, str): return ""
         nazev = nazev.lower().strip()
-        mapping = {
-            # Anglie
-            "man city": "manchester city", "man utd": "manchester united", "man united": "manchester united",
-            "leicester": "leicester city", "leeds": "leeds united", "notts forest": "nottingham forest",
-            "wolves": "wolverhampton wanderers", "brighton": "brighton & hove albion",
-            "spurs": "tottenham hotspur", "tottenham": "tottenham hotspur",
-            "west ham": "west ham united", "newcastle": "newcastle united", "luton": "luton town",
-            # Itálie
-            "inter": "inter milan", "internazionale": "inter milan", "milan": "ac milan",
-            "juve": "juventus", "roma": "as roma", "lazio": "ss lazio", "napoli": "ssc napoli",
-            # Španělsko
-            "barca": "barcelona", "fc barcelona": "barcelona", "real madrid": "real madrid",
-            "atletico": "atletico madrid", "athl bilbao": "athletic bilbao", "betis": "real betis",
-            "sociedad": "real sociedad", "sevilla": "sevilla fc",
-            # Německo
-            "bayern": "bayern munich", "bayern munchen": "bayern munich", "dortmund": "borussia dortmund",
-            "leverkusen": "bayer leverkusen", "leipzig": "rb leipzig", "mainz": "mainz 05",
-            "frankfurt": "eintracht frankfurt", "stuttgart": "vfb stuttgart",
-            # Francie
-            "psg": "paris saint germain", "paris sg": "paris saint germain", "marseille": "olympique marseille",
-            "lyon": "olympique lyon", "monaco": "as monaco", "lille": "lille osc"
-        }
-        # Pokud název obsahuje " fc", " cf", " ac", odstraníme to pro lepší shodu
-        clean = nazev.replace(" fc", "").replace(" cf", "").replace(" ac", "").replace(" as", "")
-        return mapping.get(nazev, mapping.get(clean, clean))
+        # Základní čištění
+        nazev = nazev.replace(" fc", "").replace(" cf", "").replace(" ac", "").replace(" as", "").replace(" sc", "")
+        return nazev
 
     @st.cache_data(ttl=3600)
     def nacti_fotbal_data(liga_nazev, rok_start):
         kody = LIGY_KODY[liga_nazev]
         
-        # 1. Zkusíme stáhnout historii pro vybraný rok
+        # 1. Historie
         rok_konec = rok_start + 1
         sezona_short = f"{str(rok_start)[-2:]}{str(rok_konec)[-2:]}"
+        # Zkusíme standardní cestu
         url_hist = f"https://www.football-data.co.uk/mmz4281/{sezona_short}/{kody['hist']}.csv"
         
         df_h = None
-        pouzity_rok_historie = rok_start
-        
         try:
             r_h = requests.get(url_hist)
             if r_h.status_code == 200:
                 df_h = pd.read_csv(io.StringIO(r_h.text))
             else:
-                # FALLBACK: Pokud 2025 neexistuje, zkusíme 2024 (minulou sezónu)
-                prev_start = rok_start - 1
-                prev_end = rok_start
-                sezona_prev = f"{str(prev_start)[-2:]}{str(prev_end)[-2:]}"
-                url_hist_prev = f"https://www.football-data.co.uk/mmz4281/{sezona_prev}/{kody['hist']}.csv"
+                # Fallback na minulý rok (pro výpočet síly stačí i starší data)
+                prev_short = f"{str(rok_start-1)[-2:]}{str(rok_start)[-2:]}"
+                url_hist_prev = f"https://www.football-data.co.uk/mmz4281/{prev_short}/{kody['hist']}.csv"
                 r_h2 = requests.get(url_hist_prev)
                 if r_h2.status_code == 200:
                     df_h = pd.read_csv(io.StringIO(r_h2.text))
-                    pouzity_rok_historie = prev_start
         except: pass
 
-        # 2. Stáhneme rozpis (Budoucnost)
+        # 2. Budoucnost
         url_fut = f"https://fixturedownload.com/download/{kody['fut']}-{rok_start}-UTC.csv"
         df_f = None
         try:
@@ -91,14 +76,14 @@ def app_fotbal():
                 try: df_f = pd.read_csv(io.StringIO(r_f.text))
                 except: df_f = pd.read_csv(io.StringIO(r_f.content.decode('latin-1')))
             else:
-                # Alternativa GMT
+                # Zkusíme GMT
                 url_fut_alt = f"https://fixturedownload.com/download/{kody['fut']}-{rok_start}-GMTStandardTime.csv"
                 r_f2 = requests.get(url_fut_alt)
                 if r_f2.status_code == 200:
                     df_f = pd.read_csv(io.StringIO(r_f2.text))
         except: pass
         
-        return df_h, df_f, pouzity_rok_historie
+        return df_h, df_f
 
     def analyzuj_silu(df_hist):
         if df_hist is None: return {}
@@ -143,177 +128,163 @@ def app_fotbal():
     with c1: vybrana_liga = st.selectbox("Vyber ligu:", list(LIGY_KODY.keys()))
     with c2: rok = st.selectbox("Sezóna:", [2025, 2024, 2023], index=0)
 
-    with st.spinner("Analyzuji fotbalová data..."):
-        df_hist, df_fut, rok_hist = nacti_fotbal_data(vybrana_liga, rok)
+    with st.spinner("Analyzuji data..."):
+        df_hist, df_fut = nacti_fotbal_data(vybrana_liga, rok)
     
+    db_sily = {}
     if df_hist is not None:
-        if rok_hist != rok:
-            st.warning(f"⚠️ Data pro sezónu {rok} nejsou kompletní. Používám data z roku {rok_hist} pro výpočet síly týmů.")
-        
         db_sily = analyzuj_silu(df_hist)
-        
-        with st.expander("📊 Tabulka formy a bodů"):
-            df_form = pd.DataFrame.from_dict(db_sily, orient='index').sort_values(by='body', ascending=False)
-            st.dataframe(df_form)
-
-        if df_fut is not None:
-            st.subheader(f"📅 Rozpis zápasů: {vybrana_liga}")
-            col_date = next((c for c in df_fut.columns if "Date" in c or "Time" in c), None)
-            
-            if col_date:
-                df_fut['DateObj'] = pd.to_datetime(df_fut[col_date], dayfirst=True, errors='coerce')
-                if df_fut['DateObj'].isnull().all():
-                     df_fut['DateObj'] = pd.to_datetime(df_fut[col_date], errors='coerce')
-                
-                dnes = datetime.now()
-                # Zobrazíme zápasy od dneška dál (limit 20)
-                budouci = df_fut[df_fut['DateObj'] >= dnes].sort_values(by='DateObj').head(20)
-                
-                if budouci.empty:
-                    st.warning("Žádné budoucí zápasy v rozpisu.")
-                else:
-                    for index, row in budouci.iterrows():
-                        col_home = [c for c in df_fut.columns if "Home" in c][0]
-                        col_away = [c for c in df_fut.columns if "Away" in c][0]
-                        domaci = row[col_home]
-                        hoste = row[col_away]
-                        datum_str = row[col_date]
-                        
-                        # Normalizace
-                        d_norm = normalizuj_nazev(domaci)
-                        h_norm = normalizuj_nazev(hoste)
-                        
-                        info_d = db_sily.get(d_norm)
-                        info_h = db_sily.get(h_norm)
-                        
-                        # Fuzzy hledání (pokud přesná shoda selže)
-                        if not info_d:
-                            for k in db_sily: 
-                                if d_norm in k or k in d_norm: info_d = db_sily[k]; break
-                        if not info_h:
-                            for k in db_sily: 
-                                if h_norm in k or k in h_norm: info_h = db_sily[k]; break
-
-                        with st.container():
-                            c1, c2, c3 = st.columns([3, 2, 3])
-                            if info_d and info_h:
-                                sila_d = info_d['sila'] + 10
-                                sila_h = info_h['sila']
-                                celk = sila_d + sila_h
-                                pd_val = (sila_d / celk) * 100
-                                ph_val = (sila_h / celk) * 100
-                                
-                                with c1: st.markdown(f"<div style='text-align:right'><b>{domaci}</b><br>{info_d['forma']}</div>", unsafe_allow_html=True)
-                                with c2: 
-                                    st.markdown(f"<div style='text-align:center'>{datum_str}<br><h4>{int(pd_val)}% : {int(ph_val)}%</h4></div>", unsafe_allow_html=True)
-                                    if pd_val > 60: st.success(f"Tip: {domaci}")
-                                    elif ph_val > 60: st.error(f"Tip: {hoste}")
-                                    else: st.warning("Remíza / Risk")
-                                with c3: st.markdown(f"<div style='text-align:left'><b>{hoste}</b><br>{info_h['forma']}</div>", unsafe_allow_html=True)
-                            else:
-                                with c2: 
-                                    st.write(f"{domaci} vs {hoste}")
-                                    st.caption("Chybí data o týmech")
-                            st.markdown("---")
+        with st.expander("📊 Tabulka formy (z dostupných dat)"):
+            st.dataframe(pd.DataFrame.from_dict(db_sily, orient='index').sort_values(by='body', ascending=False))
     else:
-        st.error(f"Nepodařilo se načíst historická data ani pro rok {rok}, ani pro rok {rok-1}.")
+        st.warning("Pro tuto ligu/sezónu se nepodařilo stáhnout historická data. Predikce nebudou přesné.")
+
+    if df_fut is not None:
+        st.subheader(f"📅 Rozpis: {vybrana_liga}")
+        col_date = next((c for c in df_fut.columns if "Date" in c or "Time" in c), None)
+        
+        if col_date:
+            df_fut['DateObj'] = pd.to_datetime(df_fut[col_date], dayfirst=True, errors='coerce')
+            if df_fut['DateObj'].isnull().all():
+                    df_fut['DateObj'] = pd.to_datetime(df_fut[col_date], errors='coerce')
+            
+            dnes = datetime.now()
+            budouci = df_fut[df_fut['DateObj'] >= dnes].sort_values(by='DateObj').head(20)
+            
+            if budouci.empty:
+                st.info("Žádné budoucí zápasy v rozpisu.")
+            else:
+                for index, row in budouci.iterrows():
+                    col_home = [c for c in df_fut.columns if "Home" in c][0]
+                    col_away = [c for c in df_fut.columns if "Away" in c][0]
+                    domaci = row[col_home]
+                    hoste = row[col_away]
+                    datum_str = row[col_date]
+                    
+                    # Normalizace a hledání
+                    d_norm = normalizuj_nazev(domaci)
+                    h_norm = normalizuj_nazev(hoste)
+                    
+                    info_d = db_sily.get(d_norm)
+                    info_h = db_sily.get(h_norm)
+                    
+                    # Fuzzy hledání
+                    if not info_d:
+                        for k in db_sily: 
+                            if d_norm in k or k in d_norm: info_d = db_sily[k]; break
+                    if not info_h:
+                        for k in db_sily: 
+                            if h_norm in k or k in h_norm: info_h = db_sily[k]; break
+
+                    with st.container():
+                        c1, c2, c3 = st.columns([3, 2, 3])
+                        if info_d and info_h:
+                            sila_d = info_d['sila'] + 10
+                            sila_h = info_h['sila']
+                            celk = sila_d + sila_h
+                            pd_val = (sila_d / celk) * 100
+                            ph_val = (sila_h / celk) * 100
+                            
+                            with c1: st.markdown(f"<div style='text-align:right'><b>{domaci}</b><br>{info_d['forma']}</div>", unsafe_allow_html=True)
+                            with c2: 
+                                st.markdown(f"<div style='text-align:center'>{datum_str}<br><h4>{int(pd_val)}% : {int(ph_val)}%</h4></div>", unsafe_allow_html=True)
+                                if pd_val > 60: st.success(f"Tip: {domaci}")
+                                elif ph_val > 60: st.error(f"Tip: {hoste}")
+                                else: st.warning("Risk")
+                            with c3: st.markdown(f"<div style='text-align:left'><b>{hoste}</b><br>{info_h['forma']}</div>", unsafe_allow_html=True)
+                        else:
+                            with c2: 
+                                st.write(f"{domaci} vs {hoste}")
+                                st.caption("Chybí historie")
+                        st.markdown("---")
+    else:
+        st.error("Rozpis zápasů není dostupný.")
 
 
 # ==========================================
-# 2. MODUL: TENIS (VitiSport - Spolehlivější)
+# 2. MODUL: TENIS (Agresivní Scraping)
 # ==========================================
 
 def app_tenis():
-    st.header("🎾 Tenisový Prediktor (VitiSport)")
-    st.caption("Zdroj: VitiSport.cz (Obsahuje hotové predikce)")
+    st.header("🎾 Tenisový Radar")
+    st.caption("Zdroj: VitiSport.cz (Agresivní vyhledávání)")
 
-    @st.cache_data(ttl=1800)
-    def scrape_vitisport():
-        # VitiSport má tabulku s predikcemi přímo na webu
+    @st.cache_data(ttl=600)
+    def scrape_vitisport_aggressive():
         url = "https://www.vitisport.cz/index.php?g=tenis&lang=en"
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         
         try:
             r = requests.get(url, headers=headers)
-            if r.status_code != 200: return None, f"Chyba {r.status_code}"
+            if r.status_code != 200: return [], f"Chyba {r.status_code}"
             
-            # Pandas najde tabulky
-            dfs = pd.read_html(r.text)
+            # Zkusíme najít všechny tabulky
+            try: dfs = pd.read_html(r.text)
+            except: return [], "Pandas nenašel žádnou tabulku v HTML."
             
-            # Hledáme tabulku, která má sloupec "Score" nebo "%"
-            target_df = None
+            matches = []
+            
+            # Projdeme VŠECHNY tabulky, co jsme našli
             for df in dfs:
-                # Převedeme sloupce na string a hledáme klíčová slova
-                cols = [str(c).lower() for c in df.columns]
-                if len(cols) > 4 and any("home" in c for c in cols):
-                    target_df = df
-                    break
+                # Konvertujeme na string pro prohledávání
+                df = df.astype(str)
+                
+                # Hledáme tabulku, která má alespoň 3 sloupce a obsahuje čas (:)
+                if len(df.columns) < 3: continue
+                
+                for idx, row in df.iterrows():
+                    # VitiSport struktura je divoká, musíme hádat
+                    # Obvykle: Sloupec 0 = Čas, Sloupec 1 = Domácí, Sloupec 2 = Hosté
+                    
+                    try:
+                        col0 = str(row.iloc[0]) # Čas?
+                        col1 = str(row.iloc[1]) # Domácí?
+                        col2 = str(row.iloc[2]) # Hosté?
+                        
+                        # Kontrola, zda to vypadá jako zápas
+                        if ":" in col0 and len(col1) > 2 and len(col2) > 2:
+                            # Ignorujeme řádky s nadpisy
+                            if "Home" in col1 or "Date" in col0: continue
+                            
+                            # Hledáme tip (1 nebo 2) v celém řádku
+                            tip = "N/A"
+                            for item in row:
+                                if item == "1": tip = col1; break
+                                if item == "2": tip = col2; break
+                            
+                            matches.append({
+                                "Čas": col0,
+                                "Hráč 1": col1,
+                                "Hráč 2": col2,
+                                "Tip": tip
+                            })
+                    except: continue
             
-            if target_df is None: return None, "Tabulka nenalezena"
-            
-            return target_df, None
+            return matches, None
         except Exception as e:
-            return None, str(e)
+            return [], str(e)
 
-    with st.spinner("Stahuji tenisové tipy..."):
-        df, error = scrape_vitisport()
+    with st.spinner("Prohledávám VitiSport..."):
+        matches, error = scrape_vitisport_aggressive()
 
     if error:
         st.error(f"Chyba: {error}")
+    elif not matches:
+        st.warning("Nebyly nalezeny žádné zápasy. Web mohl změnit strukturu.")
     else:
-        st.success(f"Načteno {len(df)} zápasů.")
+        st.success(f"Nalezeno {len(matches)} zápasů.")
         
-        # VitiSport tabulka nemá pojmenované sloupce, musíme je odhadnout
-        # Obvykle: Čas, Domácí, Hosté, Tip, %1, %2
-        
-        # Přejmenování sloupců (pokus)
-        try:
-            # VitiSport má často první sloupce prázdné nebo divné, vezmeme ty podstatné
-            # Struktura se mění, ale obvykle index 0=Čas, 1=Domácí, 2=Hosté, ... 5=Tip
-            
-            for index, row in df.iterrows():
-                try:
-                    cas = str(row.iloc[0])
-                    domaci = str(row.iloc[1])
-                    hoste = str(row.iloc[2])
-                    
-                    # Pokud řádek vypadá jako nadpis, přeskočíme
-                    if "Home" in domaci or "Date" in cas: continue
-                    if pd.isna(domaci) or pd.isna(hoste): continue
-
-                    # Zkusíme najít procenta (často jsou ve sloupcích 6 a 7 nebo podobně)
-                    # Hledáme sloupce, které obsahují čísla
-                    
-                    # Jednoduché zobrazení řádku
-                    with st.container():
-                        c1, c2, c3 = st.columns([3, 2, 3])
-                        
-                        with c1: 
-                            st.markdown(f"<div style='text-align:right'><b>{domaci}</b></div>", unsafe_allow_html=True)
-                        
-                        with c2:
-                            st.markdown(f"<div style='text-align:center'>{cas}<br>VS</div>", unsafe_allow_html=True)
-                            
-                            # Pokus o nalezení tipu v řádku
-                            # Projdeme buňky a hledáme něco co vypadá jako "1", "2" nebo procenta
-                            tip = ""
-                            for item in row:
-                                s = str(item)
-                                if s in ["1", "2"]: 
-                                    tip = s
-                                    break
-                            
-                            if tip == "1": st.success(f"Tip: {domaci}")
-                            elif tip == "2": st.error(f"Tip: {hoste}")
-                        
-                        with c3:
-                            st.markdown(f"<div style='text-align:left'><b>{hoste}</b></div>", unsafe_allow_html=True)
-                        
-                        st.markdown("---")
-                except: continue
-        except Exception as e:
-            st.error(f"Chyba při zpracování tabulky: {e}")
-            st.dataframe(df) # Debug
+        for m in matches:
+            with st.container():
+                c1, c2, c3 = st.columns([3, 2, 3])
+                with c1: st.markdown(f"<div style='text-align:right'><b>{m['Hráč 1']}</b></div>", unsafe_allow_html=True)
+                with c2: 
+                    st.markdown(f"<div style='text-align:center'>{m['Čas']}<br>VS</div>", unsafe_allow_html=True)
+                    if m['Tip'] != "N/A":
+                        if m['Tip'] == m['Hráč 1']: st.success(f"Tip: {m['Hráč 1']}")
+                        else: st.error(f"Tip: {m['Hráč 2']}")
+                with c3: st.markdown(f"<div style='text-align:left'><b>{m['Hráč 2']}</b></div>", unsafe_allow_html=True)
+                st.markdown("---")
 
 # ==========================================
 # HLAVNÍ ROZCESTNÍK
