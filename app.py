@@ -3,10 +3,12 @@ import pandas as pd
 import requests
 from datetime import datetime
 
-# --- KONFIGURACE ---\ntry:
+# --- KONFIGURACE ---
+# Tady musí být kód zarovnaný úplně vlevo (žádné mezery na začátku řádku)
+if "FOOTBALL_API_KEY" in st.secrets:
     API_KEY = st.secrets["FOOTBALL_API_KEY"]
-except FileNotFoundError:
-    st.error("Chybí API klíč v Secrets!")
+else:
+    st.error("Chybí API klíč v Secrets! Nastav ho v .streamlit/secrets.toml nebo na Streamlit Cloud.")
     st.stop()
 
 BASE_URL = "https://api.football-data.org/v4"
@@ -14,7 +16,8 @@ HEADERS = {'X-Auth-Token': API_KEY}
 
 st.set_page_config(page_title="Betting Pro", layout="wide")
 
-# --- FUNKCE ---\n
+# --- FUNKCE ---
+
 @st.cache_data(ttl=600)
 def nacti_data_ligy():
     # Stáhneme tabulku včetně log týmů
@@ -34,16 +37,14 @@ def nacti_data_ligy():
         logo = radek['team']['crest']
         body = radek['points']
         
-        # --- OPRAVA CHYBY ZDE ---
-        # Získáme formu, ale pokud je None (null), nahradíme ji prázdným řetězcem ""
+        # Ošetření chybějící formy
         raw_form = radek.get('form')
         if raw_form is None:
             forma = ""
         else:
             forma = raw_form
         
-        # Výpočet síly (Body + Bonus za formu)
-        # Teď už 'forma' je vždy text, takže .count() nespadne
+        # Výpočet síly
         bonus = forma.count("W") * 3 
         sila = body + bonus
         
@@ -62,7 +63,8 @@ def nacti_zapasy():
         return []
     return response.json()['matches']
 
-# --- UI APLIKACE ---\n
+# --- UI APLIKACE ---
+
 st.title("⚽ Premier League: Smart Betting")
 st.markdown("---")
 
@@ -100,7 +102,6 @@ else:
             
             celkova_sila = sila_d + sila_h
             
-            # Ošetření dělení nulou (kdyby náhodou měli oba 0 bodů)
             if celkova_sila == 0:
                 sance_domaci = 50
                 sance_hoste = 50
@@ -129,7 +130,6 @@ else:
                     st.write(f"*{datum}*")
                     st.markdown(f"### {int(sance_domaci)}% vs {int(sance_hoste)}%")
                     
-                    # Zvýraznění favorita
                     if sance_domaci > 60:
                         st.success(f"Tip: {domaci}")
                     elif sance_hoste > 60:
@@ -142,9 +142,7 @@ else:
                     st.write(f"**{hoste}**")
                     st.caption(f"Forma: {info_hoste['forma']}")
                 
-                # Detailní data pod kartou
-                with st.expander(f"📊 Analýza a Kurzy pro: {domaci} vs {hoste}"):
-                    c1, c2 = st.columns(2)
+                with st.expander(f"📊 Analýza a Kurzy pro: {domaci} vs {hoste}"):\n                    c1, c2 = st.columns(2)
                     c1.metric("Náš Férový Kurz (Domácí)", f"{kurz_domaci:.2f}")
                     c2.metric("Náš Férový Kurz (Hosté)", f"{kurz_hoste:.2f}")
                     st.info("Pokud sázková kancelář nabízí vyšší kurz než je náš 'Férový', jde o výhodnou sázku (Value Bet).")
