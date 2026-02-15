@@ -4,7 +4,6 @@ import requests
 from datetime import datetime
 
 # --- KONFIGURACE ---
-# Tady musí být kód zarovnaný úplně vlevo (žádné mezery na začátku řádku)
 if "FOOTBALL_API_KEY" in st.secrets:
     API_KEY = st.secrets["FOOTBALL_API_KEY"]
 else:
@@ -142,7 +141,9 @@ else:
                     st.write(f"**{hoste}**")
                     st.caption(f"Forma: {info_hoste['forma']}")
                 
-                with st.expander(f"📊 Analýza a Kurzy pro: {domaci} vs {hoste}"):\n                    c1, c2 = st.columns(2)
+                # Detailní data pod kartou
+                with st.expander(f"📊 Analýza a Kurzy pro: {domaci} vs {hoste}"):
+                    c1, c2 = st.columns(2)
                     c1.metric("Náš Férový Kurz (Domácí)", f"{kurz_domaci:.2f}")
                     c2.metric("Náš Férový Kurz (Hosté)", f"{kurz_hoste:.2f}")
                     st.info("Pokud sázková kancelář nabízí vyšší kurz než je náš 'Férový', jde o výhodnou sázku (Value Bet).")
