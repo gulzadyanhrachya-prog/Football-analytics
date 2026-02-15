@@ -44,9 +44,8 @@ st.sidebar.title("Nastavení")
 vybrana_liga_nazev = st.sidebar.selectbox("Soutěž:", list(LIGY.keys()))
 LIGA_ID = LIGY[vybrana_liga_nazev]
 
-# PŘIDÁNO: Rozšířený výběr sezón včetně budoucnosti
-# API bere rok startu sezóny (např. 2025 = sezóna 2025/2026)
-vybrana_sezona = st.sidebar.selectbox("Začátek sezóny (Rok):", [2025, 2024, 2023, 2022], index=0)
+# Výběr sezóny
+vybrana_sezona = st.sidebar.selectbox("Začátek sezóny (Rok):", [2025, 2024, 2023, 2022], index=1)
 
 st.sidebar.info(f"Limit API: 100 požadavků/den.")
 
@@ -60,7 +59,9 @@ def nacti_tabulku(liga_id, sezona):
         response = requests.get(url, headers=HEADERS, params=querystring)
         data = response.json()
         
-        if not data['response']: return None
+        # OPRAVA CHYBY ZDE: Pokud nejsou data, vracíme (None, None)
+        if not data['response']: 
+            return None, None
 
         standings = data['response'][0]['league']['standings'][0]
         
@@ -103,12 +104,12 @@ def nacti_tabulku(liga_id, sezona):
         return tymy_info, pd.DataFrame(seznam_tymu)
         
     except Exception as e:
+        # I při chybě musíme vrátit dvě hodnoty
         return None, None
 
 @st.cache_data(ttl=3600)
 def nacti_zapasy(liga_id, sezona):
     url = f"{URL_BASE}/fixtures"
-    # Hledáme "next 10" zápasů
     querystring = {"season": str(sezona), "league": str(liga_id), "next": "10"}
     try:
         response = requests.get(url, headers=HEADERS, params=querystring)
@@ -124,10 +125,9 @@ st.caption(f"Zobrazená sezóna: {vybrana_sezona}/{vybrana_sezona+1}")
 with st.spinner("Analyzuji statistiky..."):
     tymy_db, df_tabulka = nacti_tabulku(LIGA_ID, vybrana_sezona)
 
-# Pokud tabulka neexistuje (např. začátek sezóny a API ještě nemá tabulku), zkusíme alespoň zápasy
+# Pokud tabulka neexistuje, vytvoříme prázdný slovník, aby aplikace nespadla
 if not tymy_db:
-    st.warning(f"Tabulka pro sezónu {vybrana_sezona}/{vybrana_sezona+1} zatím není v API dostupná.")
-    st.write("Důvod: Buď sezóna ještě nezačala, nebo API nemá data. Zkus přepnout rok v menu.")
+    st.warning(f"Tabulka pro sezónu {vybrana_sezona}/{vybrana_sezona+1} zatím není v API dostupná (nebo sezóna nezačala).")
     tymy_db = {} 
 
 tab1, tab2 = st.tabs(["🔮 Predikce & Kurzy", "📊 Tabulka Ligy"])
@@ -145,7 +145,6 @@ with tab1:
             hoste = zapas['teams']['away']['name']
             datum = datetime.fromisoformat(zapas['fixture']['date'].replace("Z", "+00:00")).strftime("%d.%m. %H:%M")
             
-            # Loga (bereme přímo ze zápasu, kdyby nebyla v DB)
             logo_d = zapas['teams']['home']['logo']
             logo_h = zapas['teams']['away']['logo']
 
