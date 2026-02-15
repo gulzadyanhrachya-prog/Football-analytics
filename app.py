@@ -15,35 +15,59 @@ HEADERS = {'X-Auth-Token': API_KEY}
 
 st.set_page_config(page_title="Betting Pro", layout="wide")
 
+# --- DEFINICE LIG (Kódování API) ---
+# Toto jsou ligy dostupné ve Free Tieru
+LIGY = {
+    "🇬🇧 Premier League (Anglie 1)": "PL",
+    "🇬🇧 Championship (Anglie 2)": "ELC",
+    "🇩🇪 Bundesliga (Německo 1)": "BL1",
+    "🇪🇸 La Liga (Španělsko 1)": "PD",
+    "🇮🇹 Serie A (Itálie 1)": "SA",
+    "🇫🇷 Ligue 1 (Francie 1)": "FL1",
+    "🇳🇱 Eredivisie (Holandsko 1)": "DED",
+    "🇵🇹 Primeira Liga (Portugalsko 1)": "PPL",
+    "🇪🇺 Liga Mistrů (Champions League)": "CL"
+}
+
+# --- SIDEBAR (VÝBĚR LIGY) ---
+st.sidebar.title("Nastavení")
+vybrana_liga_nazev = st.sidebar.selectbox("Vyber soutěž:", list(LIGY.keys()))
+KOD_LIGY = LIGY[vybrana_liga_nazev]
+
+st.sidebar.info(f"Právě analyzuji: {vybrana_liga_nazev}")
+st.sidebar.markdown("---")
+st.sidebar.write("Poznámka: Free verze API má omezený počet volání za minutu. Pokud data nenaskočí, chvíli počkej.")
+
 # --- FUNKCE ---
 
 @st.cache_data(ttl=600)
-def nacti_data_ligy():
-    # Stáhneme tabulku včetně log týmů
-    url = f"{BASE_URL}/competitions/PL/standings"
+def nacti_data_ligy(kod_ligy):
+    # Stáhneme tabulku pro VYBRANOU ligu
+    url = f"{BASE_URL}/competitions/{kod_ligy}/standings"
     response = requests.get(url, headers=HEADERS)
     
     if response.status_code != 200:
         return None
 
     data = response.json()
-    tabulka = data['standings'][0]['table']
+    # Některé ligy (třeba Liga mistrů) mají jinou strukturu, zkusíme najít tabulku 'TOTAL'
+    try:
+        tabulka = data['standings'][0]['table']
+    except (KeyError, IndexError):
+        return None
     
-    # Uložíme si data o týmech do slovníku pro rychlé vyhledávání
     tymy_info = {}
     for radek in tabulka:
         tym = radek['team']['name']
         logo = radek['team']['crest']
         body = radek['points']
         
-        # Ošetření chybějící formy
         raw_form = radek.get('form')
         if raw_form is None:
             forma = ""
         else:
             forma = raw_form
         
-        # Výpočet síly
         bonus = forma.count("W") * 3 
         sila = body + bonus
         
@@ -55,8 +79,9 @@ def nacti_data_ligy():
         
     return tymy_info
 
-def nacti_zapasy():
-    url = f"{BASE_URL}/competitions/PL/matches?status=SCHEDULED"
+def nacti_zapasy(kod_ligy):
+    # Stáhneme zápasy pro VYBRANOU ligu
+    url = f"{BASE_URL}/competitions/{kod_ligy}/matches?status=SCHEDULED"
     response = requests.get(url, headers=HEADERS)
     if response.status_code != 200:
         return []
@@ -64,39 +89,37 @@ def nacti_zapasy():
 
 # --- UI APLIKACE ---
 
-st.title("⚽ Premier League: Smart Betting")
+st.title(f"⚽ {vybrana_liga_nazev}")
 st.markdown("---")
 
 # 1. Načtení dat
-with st.spinner('Stahuji data a loga týmů...'):
-    tymy_db = nacti_data_ligy()
+with st.spinner(f'Stahuji data pro {vybrana_liga_nazev}...'):
+    tymy_db = nacti_data_ligy(KOD_LIGY)
 
 if not tymy_db:
-    st.error("Chyba při stahování dat. Zkontroluj API klíč nebo dostupnost služby.")
+    st.warning(f"Pro soutěž {vybrana_liga_nazev} se nepodařilo načíst tabulku. (Možná právě neprobíhá nebo má jiný formát).")
     st.stop()
 
 # 2. Načtení zápasů
-zapasy = nacti_zapasy()
+zapasy = nacti_zapasy(KOD_LIGY)
 
 if not zapasy:
-    st.info("Žádné naplánované zápasy v dohledu.")
+    st.info("Žádné naplánované zápasy v dohledu pro tuto ligu.")
 else:
-    st.subheader(f"📅 Nadcházející příležitosti ({len(zapasy)})")
+    st.subheader(f"📅 Nadcházející zápasy ({len(zapasy)})")
     
-    # Projdeme zápasy a pro každý vytvoříme hezkou kartu
-    for zapas in zapasy[:10]: # Limit na 10 zápasů
+    # Limit na 15 zápasů, ať se to nenačítá věčnost
+    for zapas in zapasy[:15]: 
         domaci = zapas['homeTeam']['name']
         hoste = zapas['awayTeam']['name']
         datum = zapas['utcDate'][:10]
         
-        # Získáme info z naší databáze
         info_domaci = tymy_db.get(domaci)
         info_hoste = tymy_db.get(hoste)
         
-        # Zobrazíme jen pokud máme data o obou týmech
         if info_domaci and info_hoste:
             # --- MATEMATIKA SÁZENÍ ---
-            sila_d = info_domaci['sila'] + 10 # Domácí výhoda
+            sila_d = info_domaci['sila'] + 10 
             sila_h = info_hoste['sila']
             
             celkova_sila = sila_d + sila_h
@@ -108,7 +131,6 @@ else:
                 sance_domaci = (sila_d / celkova_sila) * 100
                 sance_hoste = (sila_h / celkova_sila) * 100
             
-            # Výpočet férového kurzu
             try:
                 kurz_domaci = 100 / sance_domaci
                 kurz_hoste = 100 / sance_hoste
@@ -116,7 +138,7 @@ else:
                 kurz_domaci = 0
                 kurz_hoste = 0
             
-            # --- VIZUALIZACE KARTY ZÁPASU ---
+            # --- VIZUALIZACE ---
             with st.container():
                 col1, col2, col3, col4, col5 = st.columns([1, 3, 2, 3, 1])
                 
@@ -141,11 +163,10 @@ else:
                     st.write(f"**{hoste}**")
                     st.caption(f"Forma: {info_hoste['forma']}")
                 
-                # Detailní data pod kartou
-                with st.expander(f"📊 Analýza a Kurzy pro: {domaci} vs {hoste}"):
+                with st.expander(f"📊 Analýza a Kurzy: {domaci} vs {hoste}"):
                     c1, c2 = st.columns(2)
-                    c1.metric("Náš Férový Kurz (Domácí)", f"{kurz_domaci:.2f}")
-                    c2.metric("Náš Férový Kurz (Hosté)", f"{kurz_hoste:.2f}")
-                    st.info("Pokud sázková kancelář nabízí vyšší kurz než je náš 'Férový', jde o výhodnou sázku (Value Bet).")
+                    c1.metric("Férový Kurz (Domácí)", f"{kurz_domaci:.2f}")
+                    c2.metric("Férový Kurz (Hosté)", f"{kurz_hoste:.2f}")
+                    st.info("Porovnej s kurzy sázkové kanceláře.")
                 
                 st.markdown("---")
