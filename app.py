@@ -1,231 +1,167 @@
 import streamlit as st
 import pandas as pd
-import cloudscraper
+import requests
+import numpy as np
+from scipy.stats import poisson
+import matplotlib.pyplot as plt
+import seaborn as sns
 from datetime import datetime
 
-st.set_page_config(page_title="VitiSport Analyzer", layout="wide")
+st.set_page_config(page_title="Pro Football Analytics Model", layout="wide")
 
-# --- FUNKCE PRO STAŽENÍ DAT (VitiSport) ---
-@st.cache_data(ttl=1800) # Cache na 30 minut
-def scrape_vitisport(sport_type):
-    # sport_type: "fotbal" nebo "tenis"
-    url = f"https://www.vitisport.cz/index.php?g={sport_type}&lang=cs"
-    
-    scraper = cloudscraper.create_scraper()
+# --- 1. ZÍSKÁNÍ DAT (ClubElo API) ---
+@st.cache_data(ttl=3600)
+def get_elo_data():
+    # ClubElo poskytuje CSV s aktuálním Elo ratingem pro všechny týmy v Evropě
+    # Funguje to vždy, žádné blokování
+    url = "http://api.clubelo.com/" + datetime.now().strftime("%Y-%m-%d")
     
     try:
-        r = scraper.get(url)
-        if r.status_code != 200:
-            return None, f"Chyba připojení: {r.status_code}"
-        
-        # Pandas najde všechny tabulky
-        dfs = pd.read_html(r.text)
-        
-        matches = []
-        current_league = "Ostatní"
-        
-        # Projdeme tabulky. VitiSport má jednu velkou tabulku, kde se střídají nadpisy lig a zápasy.
-        # Musíme najít tu hlavní tabulku (obvykle ta největší)
-        main_df = max(dfs, key=len)
-        
-        # Převedeme na string pro zpracování
-        main_df = main_df.astype(str)
-        
-        for idx, row in main_df.iterrows():
-            # Zkusíme detekovat, co je v řádku
-            col0 = str(row.iloc[0]) # Čas nebo Liga
-            col1 = str(row.iloc[1]) # Domácí
-            col2 = str(row.iloc[2]) # Hosté
+        df = pd.read_csv(url)
+        return df
+    except:
+        return None
+
+# --- 2. MATEMATICKÉ MODELY ---
+
+def calculate_win_prob_elo(elo_home, elo_away):
+    # Základní vzorec pro Elo pravděpodobnost
+    dr = elo_home - elo_away + 100 # +100 bodů výhoda domácího prostředí
+    we = 1 / (10**(-dr/400) + 1)
+    return we
+
+def simulate_match_poisson(home_exp_goals, away_exp_goals):
+    # Poissonovo rozdělení pro výpočet přesného skóre
+    # Vytvoříme matici 5x5 gólů
+    max_goals = 6
+    probs = np.zeros((max_goals, max_goals))
+    
+    for i in range(max_goals):
+        for j in range(max_goals):
+            prob_h = poisson.pmf(i, home_exp_goals)
+            prob_a = poisson.pmf(j, away_exp_goals)
+            probs[i, j] = prob_h * prob_a
             
-            # 1. DETEKCE LIGY (Řádek, kde je jen jeden text nebo specifická barva na webu)
-            # Na VitiSportu poznáme ligu tak, že v řádku chybí kurz/skóre
-            if len(col0) > 2 and ("nan" in col1.lower() or col1 == col0):
-                current_league = col0
-                continue
-                
-            # 2. DETEKCE ZÁPASU
-            # Musí obsahovat čas (:) a jména týmů
-            if ":" in col0 and len(col1) > 1 and len(col2) > 1:
-                # Ignorujeme hlavičky tabulky
-                if "Domácí" in col1 or "Čas" in col0: continue
-                
-                # Hledání tipu (VitiSport má tipy ve sloupcích s barvou, v pandas to bývá sloupec 5, 6 nebo podobně)
-                # Zkusíme najít sloupec, který obsahuje "1", "0", "2" nebo "10", "02"
-                tip = "N/A"
-                skore = ""
-                
-                # Projdeme celý řádek a hledáme tip
-                row_values = row.values.tolist()
-                
-                # Hledáme predikci (často na konci řádku)
-                for val in row_values:
-                    v = str(val).replace(" ", "")
-                    if v in ["1", "0", "2", "10", "02", "12"]:
-                        tip = v
-                    if ":" in v and len(v) < 6 and v != col0: # Skóre (pokud se už hrálo)
-                        skore = v
-
-                matches.append({
-                    "Liga": current_league,
-                    "Čas": col0,
-                    "Domácí": col1,
-                    "Hosté": col2,
-                    "Tip": tip,
-                    "Skóre": skore
-                })
-                
-        return matches, None
-
-    except Exception as e:
-        return None, str(e)
-
-# ==========================================
-# 1. MODUL: FOTBAL
-# ==========================================
-def app_fotbal():
-    st.header("⚽ Fotbalové Predikce (VitiSport)")
+    # Součet pravděpodobností
+    prob_home_win = np.sum(np.tril(probs, -1))
+    prob_draw = np.sum(np.diag(probs))
+    prob_away_win = np.sum(np.triu(probs, 1))
     
-    with st.spinner("Stahuji fotbalové zápasy..."):
-        matches, error = scrape_vitisport("fotbal")
-        
-    if error:
-        st.error(f"Chyba: {error}")
-    elif not matches:
-        st.warning("Nebyly nalezeny žádné zápasy.")
-    else:
-        # Získání seznamu lig pro filtr
-        vsechny_ligy = sorted(list(set([m["Liga"] for m in matches])))
-        
-        # Předdefinované oblíbené ligy (pro rychlý výběr)
-        oblibene = [
-            "Anglie - Premier League", "Německo - Bundesliga", "Španělsko - LaLiga",
-            "Itálie - Serie A", "Francie - Ligue 1", "Česko - 1. Liga",
-            "Polsko - Ekstraklasa", "Dánsko - Superliga", "Portugalsko - Liga Portugal",
-            "Rumunsko - Liga 1", "Řecko - Super League", "Turecko - Super Lig",
-            "Izrael - Ligat ha'Al", "Nizozemsko - Eredivisie", "Belgie - Jupiler Pro League",
-            "Anglie - Championship", "Německo - 2. Bundesliga", "Itálie - Serie B",
-            "Francie - Ligue 2", "Nizozemsko - Eerste Divisie"
-        ]
-        
-        # Filtr ligy
-        st.sidebar.subheader("Filtr Ligy")
-        # Najdeme, které z oblíbených jsou dnes v nabídce
-        dostupne_oblibene = [l for l in oblibene if any(l in m_liga for m_liga in vsechny_ligy)]
-        
-        vyber_ligy = st.sidebar.selectbox(
-            "Vyber ligu:", 
-            ["Všechny zápasy"] + dostupne_oblibene + ["--- Ostatní ---"] + vsechny_ligy
-        )
-        
-        # Filtrování dat
-        filtered_matches = []
-        for m in matches:
-            if vyber_ligy == "Všechny zápasy":
-                filtered_matches.append(m)
-            elif vyber_ligy == "--- Ostatní ---":
-                pass
-            elif vyber_ligy in m["Liga"] or m["Liga"] in vyber_ligy:
-                filtered_matches.append(m)
-        
-        st.info(f"Zobrazeno {len(filtered_matches)} zápasů.")
-        
-        for m in filtered_matches:
-            with st.container():
-                c1, c2, c3, c4 = st.columns([2, 3, 1, 3])
-                
-                with c1:
-                    st.caption(m["Liga"])
-                    st.write(f"**{m['Čas']}**")
-                
-                with c2:
-                    st.markdown(f"<div style='text-align:right'><b>{m['Domácí']}</b></div>", unsafe_allow_html=True)
-                
-                with c3:
-                    if m['Skóre']:
-                        st.markdown(f"<div style='text-align:center; font-weight:bold'>{m['Skóre']}</div>", unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"<div style='text-align:center'>vs</div>", unsafe_allow_html=True)
-                        
-                    # Zobrazení tipu
-                    tip = m['Tip']
-                    if tip == "1": st.success(f"Tip: 1")
-                    elif tip == "2": st.error(f"Tip: 2")
-                    elif tip == "0": st.warning(f"Tip: 0")
-                    elif tip == "10": st.success(f"Tip: 10")
-                    elif tip == "02": st.error(f"Tip: 02")
-                
-                with c4:
-                    st.markdown(f"<div style='text-align:left'><b>{m['Hosté']}</b></div>", unsafe_allow_html=True)
-                
-                st.markdown("---")
+    return prob_home_win, prob_draw, prob_away_win, probs
 
-# ==========================================
-# 2. MODUL: TENIS
-# ==========================================
-def app_tenis():
-    st.header("🎾 Tenisové Predikce (VitiSport)")
+# --- UI APLIKACE ---
+
+st.title("⚽ Advanced Football Analytics Model (2025/2026)")
+st.markdown("""
+Tento nástroj používá **Elo Rating** a **Poissonovo rozdělení** k modelování zápasů.
+Simuluje **xG (Očekávané góly)** na základě síly týmů a hledá **Value Bet**.
+""")
+
+with st.spinner("Stahuji aktuální Elo ratingy z celé Evropy..."):
+    df = get_elo_data()
+
+if df is not None:
+    # Filtry pro výběr týmů
+    countries = sorted(df['Country'].unique())
     
-    with st.spinner("Stahuji tenisové zápasy..."):
-        matches, error = scrape_vitisport("tenis")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.subheader("1. Výběr Domácích")
+        country_h = st.selectbox("Země (Domácí):", countries, index=countries.index("ENG") if "ENG" in countries else 0)
+        teams_h = sorted(df[df['Country'] == country_h]['Club'].unique())
+        home_team = st.selectbox("Tým (Domácí):", teams_h)
         
-    if error:
-        st.error(f"Chyba: {error}")
-    elif not matches:
-        st.warning("Nebyly nalezeny žádné zápasy.")
-    else:
-        # Filtr turnajů
-        turnaje = sorted(list(set([m["Liga"] for m in matches])))
-        atp_wta = [t for t in turnaje if "ATP" in t or "WTA" in t or "Challenger" in t]
+    with col2:
+        st.subheader("2. Výběr Hostů")
+        country_a = st.selectbox("Země (Hosté):", countries, index=countries.index("ENG") if "ENG" in countries else 0)
+        teams_a = sorted(df[df['Country'] == country_a]['Club'].unique())
+        away_team = st.selectbox("Tým (Hosté):", teams_a)
         
-        st.sidebar.subheader("Filtr Turnaje")
-        filtr_turnaj = st.sidebar.selectbox("Vyber turnaj:", ["Všechny ATP/WTA"] + ["Vše"] + turnaje)
+    with col3:
+        st.subheader("3. Parametry Modelu")
+        # Uživatel může upravit odhadované xG, pokud má lepší info (zranění atd.)
+        elo_h = df[df['Club'] == home_team]['Elo'].values[0]
+        elo_a = df[df['Club'] == away_team]['Elo'].values[0]
         
-        filtered_matches = []
-        for m in matches:
-            if filtr_turnaj == "Vše":
-                filtered_matches.append(m)
-            elif filtr_turnaj == "Všechny ATP/WTA":
-                if "ATP" in m["Liga"] or "WTA" in m["Liga"] or "Challenger" in m["Liga"]:
-                    filtered_matches.append(m)
-            elif m["Liga"] == filtr_turnaj:
-                filtered_matches.append(m)
-                
-        st.info(f"Zobrazeno {len(filtered_matches)} zápasů.")
+        # Automatický odhad xG na základě rozdílu Elo
+        elo_diff = elo_h - elo_a + 100 # Domácí výhoda
+        expected_xg_h = 1.4 + (elo_diff / 500)
+        expected_xg_a = 1.1 - (elo_diff / 500)
         
-        for m in filtered_matches:
-            with st.container():
-                c1, c2, c3, c4 = st.columns([2, 3, 1, 3])
-                
-                with c1:
-                    st.caption(m["Liga"])
-                    st.write(f"**{m['Čas']}**")
-                
-                with c2:
-                    st.markdown(f"<div style='text-align:right'><b>{m['Domácí']}</b></div>", unsafe_allow_html=True)
-                
-                with c3:
-                    if m['Skóre']:
-                        st.markdown(f"<div style='text-align:center; font-weight:bold'>{m['Skóre']}</div>", unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"<div style='text-align:center'>vs</div>", unsafe_allow_html=True)
-                    
-                    tip = m['Tip']
-                    if tip == "1": st.success("Tip: 1")
-                    elif tip == "2": st.error("Tip: 2")
-                    else: st.info(f"Tip: {tip}")
-                
-                with c4:
-                    st.markdown(f"<div style='text-align:left'><b>{m['Hosté']}</b></div>", unsafe_allow_html=True)
-                
-                st.markdown("---")
+        # Ochrana proti záporným gólům
+        expected_xg_h = max(0.1, expected_xg_h)
+        expected_xg_a = max(0.1, expected_xg_a)
+        
+        xg_h_input = st.number_input("Odhadované xG (Domácí):", value=float(round(expected_xg_h, 2)), step=0.1)
+        xg_a_input = st.number_input("Odhadované xG (Hosté):", value=float(round(expected_xg_a, 2)), step=0.1)
 
-# ==========================================
-# HLAVNÍ ROZCESTNÍK
-# ==========================================
-st.sidebar.title("🏆 Sportovní Centrum")
-sport = st.sidebar.radio("Vyber sport:", ["⚽ Fotbal", "🎾 Tenis"])
+    st.markdown("---")
 
-if sport == "⚽ Fotbal":
-    app_fotbal()
-elif sport == "🎾 Tenis":
-    app_tenis()
+    # --- VÝPOČTY ---
+    
+    # 1. Elo Probabilities
+    elo_prob_h = calculate_win_prob_elo(elo_h, elo_a)
+    
+    # 2. Poisson Probabilities
+    p_h, p_d, p_a, score_matrix = simulate_match_poisson(xg_h_input, xg_a_input)
+    
+    # 3. Fair Odds (Férové kurzy)
+    odd_h = 1 / p_h if p_h > 0 else 0
+    odd_d = 1 / p_d if p_d > 0 else 0
+    odd_a = 1 / p_a if p_a > 0 else 0
+
+    # --- VIZUALIZACE VÝSLEDKŮ ---
+    
+    c1, c2 = st.columns([1, 2])
+    
+    with c1:
+        st.subheader("📊 Analýza Síly (Elo)")
+        st.write(f"**{home_team}**: {int(elo_h)}")
+        st.write(f"**{away_team}**: {int(elo_a)}")
+        
+        delta = int(elo_h - elo_a)
+        if delta > 0:
+            st.success(f"Domácí jsou silnější o {delta} bodů")
+        else:
+            st.error(f"Hosté jsou silnější o {abs(delta)} bodů")
+            
+        st.markdown("### 🎯 Predikce (Poisson)")
+        st.metric("Pravděpodobnost Výhry Domácích", f"{p_h*100:.1f} %")
+        st.metric("Pravděpodobnost Remízy", f"{p_d*100:.1f} %")
+        st.metric("Pravděpodobnost Výhry Hostů", f"{p_a*100:.1f} %")
+
+    with c2:
+        st.subheader("💰 Value Betting (Férové Kurzy)")
+        st.info("Zadej kurz sázkové kanceláře a zjisti, zda se vyplatí vsadit.")
+        
+        kc1, kc2, kc3 = st.columns(3)
+        kc1.metric("Férový kurz 1", f"{odd_h:.2f}")
+        kc2.metric("Férový kurz X", f"{odd_d:.2f}")
+        kc3.metric("Férový kurz 2", f"{odd_a:.2f}")
+        
+        # Input pro sázkovku
+        market_odd = st.number_input("Kurz sázkovky na tvůj tip:", value=2.0, step=0.01)
+        my_fair_odd = st.radio("Na co chceš sázet?", ["Výhra Domácí", "Remíza", "Výhra Hosté"])
+        
+        target_odd = odd_h if my_fair_odd == "Výhra Domácí" else (odd_d if my_fair_odd == "Remíza" else odd_a)
+        
+        if market_odd > target_odd:
+            value = (market_odd / target_odd) - 1
+            st.success(f"✅ **VALUE BET!** Sázkovka nabízí {market_odd}, ale férový kurz je {target_odd:.2f}. Hodnota: {value*100:.1f}%")
+        else:
+            st.error(f"❌ **NEVSÁZET.** Kurz je příliš nízký. Potřebuješ alespoň {target_odd:.2f}.")
+
+    # --- HEATMAPA SKÓRE ---
+    st.markdown("---")
+    st.subheader("🔥 Pravděpodobnost Přesného Výsledku (Heatmapa)")
+    
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sns.heatmap(score_matrix, annot=True, fmt=".1%", cmap="YlGnBu", ax=ax,
+                xticklabels=[0,1,2,3,4,5], yticklabels=[0,1,2,3,4,5])
+    ax.set_xlabel(f"Góly {away_team}")
+    ax.set_ylabel(f"Góly {home_team}")
+    st.pyplot(fig)
+
+else:
+    st.error("Nepodařilo se načíst data z ClubElo. Zkus to za chvíli.")
