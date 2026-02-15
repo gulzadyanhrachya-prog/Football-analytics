@@ -5,9 +5,8 @@ from scipy.stats import poisson
 from datetime import datetime, timedelta
 import requests
 import io
-import cloudscraper
 
-st.set_page_config(page_title="Betting Auto-Pilot v15", layout="wide")
+st.set_page_config(page_title="Betting Auto-Pilot v16", layout="wide")
 
 # ==============================================================================\n# MODUL 1: FOTBAL (ClubElo Math Model)\n# ==============================================================================\n
 def app_fotbal():
@@ -135,114 +134,106 @@ def app_fotbal():
             else: st.warning("Nepodařilo se vypočítat predikce.")
     else: st.error("Chyba ClubElo API.")
 
-# ==============================================================================\n# MODUL 2: TENIS (Foretennis Scraper)\n# ==============================================================================\n
+# ==============================================================================\n# MODUL 2: TENIS (VitiSport přes Proxy)\n# ==============================================================================\n
 def app_tenis():
     st.header("🎾 Tenisový Auto-Pilot")
-    st.caption("Zdroj: Foretennis.com (Matematické predikce)")
+    st.caption("Zdroj: VitiSport.cz (Tunelováno přes Proxy)")
 
     @st.cache_data(ttl=1800)
-    def scrape_foretennis():
-        url = "https://www.foretennis.com/prediction/"
-        scraper = cloudscraper.create_scraper()
+    def scrape_vitisport_proxy():
+        # Použijeme Proxy Tunel, abychom se vyhnuli chybě "Empty Document"
+        target_url = "https://www.vitisport.cz/index.php?g=tenis&lang=en"
+        proxy_url = f"https://corsproxy.io/?{target_url}"
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
         
         try:
-            r = scraper.get(url)
-            if r.status_code != 200: return [], f"Chyba {r.status_code}"
+            r = requests.get(proxy_url, headers=headers)
+            if r.status_code != 200: return [], f"Chyba HTTP {r.status_code}"
+            if not r.text: return [], "Prázdná odpověď od serveru."
             
-            # Foretennis má jednoduché tabulky
             dfs = pd.read_html(r.text)
             matches = []
             
-            # Projdeme tabulky a hledáme tu správnou
+            # Projdeme všechny tabulky
             for df in dfs:
-                # Převedeme na string
                 df = df.astype(str)
+                if len(df.columns) < 4: continue
                 
-                # Hledáme tabulku, která má sloupec s procenty (%)
-                # Foretennis má sloupce: Date, Player1, Player2, %, Prediction
-                has_percent = False
-                for col in df.columns:
-                    if "%" in str(col) or "prob" in str(col).lower():
-                        has_percent = True
-                        break
-                
-                # Pokud tabulka nemá v hlavičce %, zkusíme se podívat do dat
-                if not has_percent and not df.empty:
-                    first_row = str(df.iloc[0].values)
-                    if "%" in first_row: has_percent = True
-
-                if has_percent or len(df.columns) >= 4:
-                    for idx, row in df.iterrows():
-                        try:
-                            # Foretennis struktura se může měnit, ale obvykle:
-                            # Player 1 | Player 2 | Prob 1 | Prob 2 | Prediction
+                for idx, row in df.iterrows():
+                    try:
+                        row_list = row.values.tolist()
+                        
+                        # Hledáme čas (XX:XX)
+                        cas = next((x for x in row_list if ":" in str(x) and len(str(x)) < 6), None)
+                        if not cas: continue
+                        
+                        # Hledáme tip (1 nebo 2)
+                        tip = None
+                        for item in row_list:
+                            if item in ["1", "2"]:
+                                tip = item
+                                break
+                        if not tip: continue
+                        
+                        # Hledáme jména hráčů
+                        strings = [str(x) for x in row_list if len(str(x)) > 3 and ":" not in str(x) and "Tip" not in str(x)]
+                        if len(strings) >= 2:
+                            p1 = strings[0]
+                            p2 = strings[1]
                             
-                            # Zkusíme najít jména a procenta
-                            row_list = row.values.tolist()
-                            row_str = " ".join([str(x) for x in row_list])
+                            if "Home" in p1 or "Away" in p1: continue
                             
-                            # Pokud řádek neobsahuje procenta, přeskočíme
-                            if "%" not in row_str: continue
-                            
-                            # Extrakce dat (pokus-omyl na základě obsahu)
-                            p1 = row_list[1] # Obvykle index 1
-                            p2 = row_list[2] # Obvykle index 2
-                            
-                            # Hledání procent
-                            probs = []
-                            for item in row_list:
-                                s = str(item).replace("%", "").strip()
-                                if s.isdigit():
-                                    probs.append(float(s))
-                            
-                            if len(probs) >= 2:
-                                prob1 = probs[0]
-                                prob2 = probs[1]
-                                
-                                # Určení tipu
-                                tip = p1 if prob1 > prob2 else p2
-                                duvera = max(prob1, prob2)
-                                
-                                matches.append({
-                                    "Zápas": f"{p1} vs {p2}",
-                                    "Tip": tip,
-                                    "Důvěra": duvera,
-                                    "Férový kurz": 100 / duvera if duvera > 0 else 0
-                                })
-                        except: continue
-            
+                            matches.append({
+                                "Čas": cas,
+                                "Hráč 1": p1,
+                                "Hráč 2": p2,
+                                "Tip": tip
+                            })
+                    except: continue
             return matches, None
-            
-        except Exception as e:
-            return [], str(e)
+        except Exception as e: return [], str(e)
 
-    with st.spinner("Stahuji tenisové predikce z Foretennis..."):
-        matches, error = scrape_foretennis()
+    with st.spinner("Stahuji tenisové tipy přes proxy..."):
+        matches, error = scrape_vitisport_proxy()
 
     if error:
         st.error(f"Chyba: {error}")
     elif not matches:
-        st.warning("Nepodařilo se načíst data. Web mohl změnit strukturu.")
-        st.write("Zkusíme záložní zdroj: **TennisExplorer** (bez predikcí, jen seznam).")
+        st.warning("Nebyly nalezeny žádné tenisové tipy.")
     else:
-        st.success(f"Nalezeno {len(matches)} zápasů s predikcí.")
-        
-        # Seřadíme podle důvěry
-        df_tenis = pd.DataFrame(matches).sort_values(by="Důvěra", ascending=False)
-        
-        # 1. TOP TUTOVKY
-        st.subheader("🔥 TOP TENISOVÉ TUTOVKY (> 70%)")
-        tutovky = df_tenis[df_tenis["Důvěra"] >= 70]
-        
-        if not tutovky.empty:
-            st.dataframe(tutovky.style.format({"Důvěra": "{:.1f} %", "Férový kurz": "{:.2f}"}), hide_index=True, use_container_width=True)
-        else:
-            st.info("Dnes žádné extrémní tutovky.")
+        # Zpracování do tabulky
+        data = []
+        for m in matches:
+            doporuceni = f"Výhra {m['Hráč 1']}" if m['Tip'] == "1" else f"Výhra {m['Hráč 2']}"
+            data.append({
+                "Čas": m['Čas'],
+                "Zápas": f"{m['Hráč 1']} vs {m['Hráč 2']}",
+                "DOPORUČENÁ SÁZKA": doporuceni,
+                "Tip Kód": m['Tip']
+            })
             
-        # 2. OSTATNÍ
-        st.subheader("💡 OSTATNÍ ZÁPASY")
-        ostatni = df_tenis[df_tenis["Důvěra"] < 70]
-        st.dataframe(ostatni.style.format({"Důvěra": "{:.1f} %", "Férový kurz": "{:.2f}"}), hide_index=True, use_container_width=True)
+        df_tenis = pd.DataFrame(data)
+        
+        st.subheader(f"🔥 Nalezeno {len(df_tenis)} tenisových tipů")
+        
+        c1, c2 = st.columns(2)
+        
+        with c1:
+            st.info("Tipy na Domácího (1)")
+            df_1 = df_tenis[df_tenis["Tip Kód"] == "1"]
+            if not df_1.empty:
+                st.dataframe(df_1[["Čas", "Zápas", "DOPORUČENÁ SÁZKA"]], hide_index=True, use_container_width=True)
+            else: st.write("Žádné tipy.")
+            
+        with c2:
+            st.error("Tipy na Hosté (2)")
+            df_2 = df_tenis[df_tenis["Tip Kód"] == "2"]
+            if not df_2.empty:
+                st.dataframe(df_2[["Čas", "Zápas", "DOPORUČENÁ SÁZKA"]], hide_index=True, use_container_width=True)
+            else: st.write("Žádné tipy.")
 
 # ==============================================================================\n# HLAVNÍ ROZCESTNÍK\n# ==============================================================================\n
 st.sidebar.title("🏆 Sportovní Centrum")
