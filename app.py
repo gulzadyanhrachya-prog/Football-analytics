@@ -14,7 +14,8 @@ def app_fotbal():
     st.header("⚽ Fotbalový Expert")
     st.caption("Data: Historie (Football-Data.co.uk) + Budoucnost (FixtureDownload.com)")
     
-    # --- KONFIGURACE ---\n    LIGY_KODY = {
+    # --- KONFIGURACE ---
+    LIGY_KODY = {
         "🇬🇧 Premier League": {"hist": "E0", "fut": "epl"},
         "🇬🇧 Championship": {"hist": "E1", "fut": "championship"},
         "🇩🇪 Bundesliga": {"hist": "D1", "fut": "bundesliga"},
@@ -45,11 +46,13 @@ def app_fotbal():
         url_hist = f"https://www.football-data.co.uk/mmz4281/{sezona_short}/{kody['hist']}.csv"
         url_fut = f"https://fixturedownload.com/download/{kody['fut']}-{rok_start}-UTC.csv"
         
+        # Stažení historie
         try:
             r_h = requests.get(url_hist)
             df_h = pd.read_csv(io.StringIO(r_h.text)) if r_h.status_code == 200 else None
         except: df_h = None
 
+        # Stažení budoucnosti
         try:
             r_f = requests.get(url_fut)
             if r_f.status_code == 200:
@@ -65,7 +68,8 @@ def app_fotbal():
 
     def analyzuj_silu(df_hist):
         if df_hist is None: return {}
-        tymy = {}\n        for index, row in df_hist.iterrows():
+        tymy = {}
+        for index, row in df_hist.iterrows():
             if pd.isna(row['FTR']): continue 
             domaci = normalizuj_nazev(row['HomeTeam'])
             hoste = normalizuj_nazev(row['AwayTeam'])
@@ -185,7 +189,6 @@ def app_tenis():
         day = date_obj.day
         url = f"https://www.tennisexplorer.com/matches/?type=all&year={year}&month={month}&day={day}"
         
-        # Vylepšená hlavička
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
@@ -195,52 +198,42 @@ def app_tenis():
             r = requests.get(url, headers=headers)
             if r.status_code != 200: return [], f"Chyba HTTP {r.status_code}"
             
-            # Použijeme lxml pro lepší parsování
             try:
                 dfs = pd.read_html(r.text, flavor='lxml')
             except:
-                dfs = pd.read_html(r.text) # Fallback
+                dfs = pd.read_html(r.text) 
             
             matches = []
             current_tournament = "Neznámý turnaj"
             
-            # Hledáme správnou tabulku - ne podle velikosti, ale podle obsahu
             target_df = None
             for df in dfs:
-                # Tabulka s kurzy má obvykle hodně sloupců a obsahuje čas
                 if len(df.columns) > 4:
-                    # Převedeme na string pro kontrolu
                     sample = str(df.head(5))
-                    if ":" in sample: # Čas
+                    if ":" in sample:
                         target_df = df
                         break
             
             if target_df is None:
-                return [], f"Nenalezena tabulka zápasů. (Nalezeno {len(dfs)} jiných tabulek)"
+                return [], "Nenalezena tabulka zápasů."
 
-            # Iterace přes řádky nalezené tabulky
             for idx, row in target_df.iterrows():
                 try:
                     col0 = str(row.iloc[0])
                     
-                    # 1. Je to název turnaje? (Nemá čas a je dlouhý)
                     if ":" not in col0 and len(col0) > 3:
                         current_tournament = col0
                         continue
                     
-                    # 2. Je to zápas? (Má čas)
                     if ":" in col0:
-                        # TennisExplorer: Time | Player | Score | Sets | Odds1 | Odds2
-                        # Kurzy jsou obvykle poslední dva sloupce
                         odds1 = row.iloc[-2]
                         odds2 = row.iloc[-1]
                         
-                        # Kontrola, zda jsou to čísla
                         try:
                             o1 = float(odds1)
                             o2 = float(odds2)
                         except:
-                            continue # Nejsou to kurzy (např. prázdné pole)
+                            continue 
                             
                         players = str(row.iloc[1])
                         if " - " in players:
@@ -262,7 +255,6 @@ def app_tenis():
         except Exception as e:
             return [], str(e)
 
-    # --- LOGIKA TENIS ---
     dnes = datetime.now()
     zitra = dnes + timedelta(days=1)
     
@@ -271,15 +263,12 @@ def app_tenis():
         zapasy_zitra, err2 = scrape_tennis_day(zitra)
         vsechny_zapasy = zapasy_dnes + zapasy_zitra
 
-    # Diagnostika, pokud se nic nenašlo
     if not vsechny_zapasy:
         st.error("Nepodařilo se stáhnout žádné zápasy.")
-        with st.expander("🔍 Zobrazit detaily chyby"):
+        with st.expander("Detaily chyby"):
             st.write(f"Dnešek: {err1}")
             st.write(f"Zítřek: {err2}")
-            st.write("Tip: Ujisti se, že jsi přidal 'lxml' do requirements.txt")
     else:
-        # Filtr turnajů
         turnaje = sorted(list(set([z["Turnaj"] for z in vsechny_zapasy])))
         
         col_f1, col_f2 = st.columns(2)
@@ -292,13 +281,11 @@ def app_tenis():
         
         count = 0
         for z in vsechny_zapasy:
-            # Filtrování
             if jen_atp and ("ATP" not in z["Turnaj"] and "WTA" not in z["Turnaj"]): continue
             if filtr_turnaj != "Vše" and z["Turnaj"] != filtr_turnaj: continue
             
             count += 1
             
-            # Výpočet predikce
             prob1 = (1 / z["Kurz 1"])
             prob2 = (1 / z["Kurz 2"])
             margin = prob1 + prob2 
