@@ -4,7 +4,7 @@ import requests
 from datetime import datetime
 
 # --- KONFIGURACE ---\ntry:
-    API_KEY = st.secrets["FOOTBALL_API_KEY"]
+API_KEY = st.secrets["FOOTBALL_API_KEY"]
 except FileNotFoundError:
     st.error("Chybí API klíč v Secrets!")
     st.stop()
