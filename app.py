@@ -4,36 +4,7 @@ import requests
 import io
 from datetime import datetime
 
-st.set_page_config(page_title="Hybrid Analyzer Debug", layout="wide")
-
-# --- KONFIGURACE ZDROJŮ DAT ---
-# Odkazy na CSV soubory
-LIGY_CONFIG = {
-    "🇬🇧 Premier League": {
-        "history": "https://www.football-data.co.uk/mmz4281/2324/E0.csv",
-        "future": "https://fixturedownload.com/download/epl-2024-GMTStandardTime.csv"
-    },
-    "🇬🇧 Championship": {
-        "history": "https://www.football-data.co.uk/mmz4281/2324/E1.csv",
-        "future": "https://fixturedownload.com/download/championship-2024-GMTStandardTime.csv"
-    },
-    "🇩🇪 Bundesliga": {
-        "history": "https://www.football-data.co.uk/mmz4281/2324/D1.csv",
-        "future": "https://fixturedownload.com/download/bundesliga-2024-UTC.csv"
-    },
-    "🇪🇸 La Liga": {
-        "history": "https://www.football-data.co.uk/mmz4281/2324/SP1.csv",
-        "future": "https://fixturedownload.com/download/la-liga-2024-UTC.csv"
-    },
-    "🇮🇹 Serie A": {
-        "history": "https://www.football-data.co.uk/mmz4281/2324/I1.csv",
-        "future": "https://fixturedownload.com/download/serie-a-2024-UTC.csv"
-    },
-    "🇫🇷 Ligue 1": {
-        "history": "https://www.football-data.co.uk/mmz4281/2324/F1.csv",
-        "future": "https://fixturedownload.com/download/ligue-1-2024-UTC.csv"
-    }
-}
+st.set_page_config(page_title="Time Travel Analyzer", layout="wide")
 
 # --- POMOCNÁ FUNKCE: PŘEKLADAČ TÝMŮ ---
 def normalizuj_nazev(nazev):
@@ -53,41 +24,84 @@ def normalizuj_nazev(nazev):
         "spurs": "tottenham hotspur",
         "tottenham": "tottenham hotspur",
         "west ham": "west ham united",
-        "newcastle": "newcastle united"
+        "newcastle": "newcastle united",
+        "sheffield utd": "sheffield united",
+        "luton": "luton town"
     }
     return mapping.get(nazev, nazev)
 
+# --- KONFIGURACE LIG (Kódy pro CSV) ---
+# E0 = Premier League, D1 = Bundesliga, atd.
+LIGY_KODY = {
+    "🇬🇧 Premier League": {"hist": "E0", "fut": "epl"},
+    "🇬🇧 Championship": {"hist": "E1", "fut": "championship"},
+    "🇩🇪 Bundesliga": {"hist": "D1", "fut": "bundesliga"},
+    "🇪🇸 La Liga": {"hist": "SP1", "fut": "la-liga"},
+    "🇮🇹 Serie A": {"hist": "I1", "fut": "serie-a"},
+    "🇫🇷 Ligue 1": {"hist": "F1", "fut": "ligue-1"}
+}
+
+# --- SIDEBAR ---
+st.sidebar.title("Nastavení Času")
+vybrana_liga = st.sidebar.selectbox("Soutěž:", list(LIGY_KODY.keys()))
+
+# Výběr sezóny - Dynamicky generujeme možnosti
+aktualni_rok = datetime.now().year
+# Pokud je únor 2026, chceme primárně sezónu 25/26 (začala 2025)
+moznosti_sezon = range(aktualni_rok + 1, 2020, -1) 
+rok_start = st.sidebar.selectbox("Začátek sezóny (Rok):", moznosti_sezon, index=1) # Defaultně minulý rok (aktuální sezóna)
+
+# Generování kódů sezóny
+# Příklad: Rok 2025 -> Sezóna 25/26 -> Kód "2526"
+rok_konec = rok_start + 1
+sezona_short = f"{str(rok_start)[-2:]}{str(rok_konec)[-2:]}" # "2526"
+sezona_long = f"{rok_start}" # "2025"
+
+st.sidebar.info(f"Hledám data pro sezónu {rok_start}/{rok_konec}")
+st.sidebar.caption(f"Kód historie: {sezona_short} | Kód budoucnosti: {sezona_long}")
+
 # --- FUNKCE PRO STAŽENÍ DAT ---
 @st.cache_data(ttl=3600)
-def nacti_data(liga_nazev):
-    urls = LIGY_CONFIG[liga_nazev]
+def nacti_data_dynamicky(liga_nazev, kod_sezony_hist, kod_sezony_fut):
+    kody = LIGY_KODY[liga_nazev]
     
-    # 1. Stažení HISTORIE
+    # 1. URL HISTORIE (football-data.co.uk)
+    url_hist = f"https://www.football-data.co.uk/mmz4281/{kod_sezony_hist}/{kody['hist']}.csv"
+    
+    # 2. URL BUDOUCNOSTI (fixturedownload.com)
+    # Tento web používá formát "epl-2025-UTC.csv"
+    url_fut = f"https://fixturedownload.com/download/{kody['fut']}-{kod_sezony_fut}-UTC.csv"
+    
+    # Stažení historie
     try:
-        r_hist = requests.get(urls["history"])
-        if r_hist.status_code == 200:
-            df_hist = pd.read_csv(io.StringIO(r_hist.text))
+        r_h = requests.get(url_hist)
+        if r_h.status_code == 200:
+            df_h = pd.read_csv(io.StringIO(r_h.text))
         else:
-            df_hist = None
-    except Exception:
-        df_hist = None
+            df_h = None
+    except: df_h = None
 
-    # 2. Stažení BUDOUCNOSTI
+    # Stažení budoucnosti
     try:
-        r_fut = requests.get(urls["future"])
-        if r_fut.status_code == 200:
+        r_f = requests.get(url_fut)
+        if r_f.status_code == 200:
             try:
-                df_fut = pd.read_csv(io.StringIO(r_fut.text))
+                df_f = pd.read_csv(io.StringIO(r_f.text))
             except:
-                df_fut = pd.read_csv(io.StringIO(r_fut.content.decode('latin-1')))
+                df_f = pd.read_csv(io.StringIO(r_f.content.decode('latin-1')))
         else:
-            df_fut = None
-    except Exception:
-        df_fut = None
-        
-    return df_hist, df_fut
+            # Zkusíme alternativní název (někdy mají GMTStandardTime místo UTC)
+            url_fut_alt = f"https://fixturedownload.com/download/{kody['fut']}-{kod_sezony_fut}-GMTStandardTime.csv"
+            r_f = requests.get(url_fut_alt)
+            if r_f.status_code == 200:
+                df_f = pd.read_csv(io.StringIO(r_f.text))
+            else:
+                df_f = None
+    except: df_f = None
+    
+    return df_h, df_f, url_hist, url_fut
 
-# --- VÝPOČET SÍLY TÝMŮ ---
+# --- VÝPOČET SÍLY ---
 def analyzuj_silu(df_hist):
     if df_hist is None: return {}
     tymy = {}
@@ -119,122 +133,111 @@ def analyzuj_silu(df_hist):
             tymy[domaci]["Forma"].append("D")
             tymy[hoste]["Forma"].append("D")
             
-    databaze_sily = {}
+    db = {}
     for nazev, data in tymy.items():
         forma_list = data["Forma"][-5:] 
         forma_str = "".join(forma_list)
         bonus = forma_str.count("W") * 3 + forma_str.count("D") * 1
         sila = data["Body"] + bonus
         
-        databaze_sily[nazev] = {
+        db[nazev] = {
             "sila": sila,
             "forma": forma_str.replace("W", "🟢").replace("L", "🔴").replace("D", "⚪"),
-            "body": data["Body"]
+            "body": data["Body"],
+            "zapasy": data["Z"]
         }
-    return databaze_sily
+    return db
 
 # --- UI APLIKACE ---
-st.title("⚽ Hybridní Analytik (Debug Mode)")
+st.title(f"⚽ Analytik: {vybrana_liga}")
 
-# Sidebar
-vybrana_liga = st.sidebar.selectbox("Vyber ligu:", list(LIGY_CONFIG.keys()))
-zobrazit_raw = st.sidebar.checkbox("Zobrazit surová data (Debug)", value=True)
+with st.spinner("Hledám data na serverech..."):
+    df_hist, df_fut, url_h, url_f = nacti_data_dynamicky(vybrana_liga, sezona_short, sezona_long)
 
-# Načtení dat
-with st.spinner("Stahuji data..."):
-    df_hist, df_fut = nacti_data(vybrana_liga)
+# Diagnostika odkazů (pro kontrolu)
+with st.expander("🔍 Zobrazit zdroje dat (Debug)"):
+    st.write(f"Historie: {url_h}")
+    st.write(f"Budoucnost: {url_f}")
+    if df_hist is None: st.error("❌ Soubor historie nenalezen (sezóna možná neexistuje).")
+    else: st.success(f"✅ Historie načtena ({len(df_hist)} zápasů).")
+    if df_fut is None: st.error("❌ Soubor budoucnosti nenalezen.")
+    else: st.success(f"✅ Rozpis načten ({len(df_fut)} zápasů).")
 
-# 1. Analýza historie
-db_sily = analyzuj_silu(df_hist)
-
-# 2. Zpracování budoucnosti
-if df_fut is not None:
-    # DIAGNOSTIKA: Zobrazíme surová data
-    if zobrazit_raw:
-        st.subheader("🛠️ Diagnostika: Surová data z rozpisu")
-        st.write(f"Počet řádků v souboru: {len(df_fut)}")
-        st.dataframe(df_fut.head())
-
-    # Pokus o převod data
-    col_date = None
-    for c in df_fut.columns:
-        if "Date" in c or "Time" in c:
-            col_date = c
-            break
-            
-    if col_date:
-        df_fut['DateObj'] = pd.to_datetime(df_fut[col_date], dayfirst=True, errors='coerce')
-        if df_fut['DateObj'].isnull().all():
-             df_fut['DateObj'] = pd.to_datetime(df_fut[col_date], errors='coerce')
-
-        dnes = datetime.now()
-        budouci_zapasy = df_fut[df_fut['DateObj'] >= dnes].sort_values(by='DateObj')
+# Logika aplikace
+if df_hist is not None:
+    db_sily = analyzuj_silu(df_hist)
+    
+    # Tabulka formy
+    df_tabulka = pd.DataFrame.from_dict(db_sily, orient='index').sort_values(by='body', ascending=False)
+    st.subheader("📊 Aktuální tabulka formy")
+    st.dataframe(df_tabulka, use_container_width=True)
+    
+    # Predikce
+    if df_fut is not None:
+        st.subheader("🔮 Predikce nadcházejících zápasů")
         
-        if budouci_zapasy.empty:
-            st.warning("⚠️ Soubor s rozpisem existuje, ale neobsahuje žádné zápasy s datem v budoucnosti.")
-            st.write(f"Dnešní datum: {dnes}")
-            if not df_fut['DateObj'].isnull().all():
-                st.write(f"Poslední datum v souboru: {df_fut['DateObj'].max()}")
-        else:
-            st.subheader(f"🔮 Predikce: {vybrana_liga}")
+        # Najdeme sloupec s datem
+        col_date = next((c for c in df_fut.columns if "Date" in c or "Time" in c), None)
+        
+        if col_date:
+            # Převod data
+            df_fut['DateObj'] = pd.to_datetime(df_fut[col_date], dayfirst=True, errors='coerce')
+            if df_fut['DateObj'].isnull().all():
+                 df_fut['DateObj'] = pd.to_datetime(df_fut[col_date], errors='coerce')
             
-            for index, row in budouci_zapasy.head(10).iterrows():
+            # Filtr: Zápasy od dneška dál
+            dnes = datetime.now()
+            # Pokud je únor 2026, chceme zápasy od února 2026 dál
+            # Pokud testuješ na starých datech, můžeš tento filtr zakomentovat
+            budouci = df_fut[df_fut['DateObj'] >= dnes].sort_values(by='DateObj')
+            
+            if budouci.empty:
+                st.warning(f"V rozpisu nejsou žádné zápasy po datu {dnes.strftime('%d.%m.%Y')}.")
+                st.write("Zobrazuji posledních 10 zápasů v rozpisu (pro kontrolu):")
+                budouci = df_fut.sort_values(by='DateObj', ascending=False).head(10)
+            
+            for index, row in budouci.head(10).iterrows():
                 col_home = [c for c in df_fut.columns if "Home" in c][0]
                 col_away = [c for c in df_fut.columns if "Away" in c][0]
                 
-                domaci_raw = row[col_home]
-                hoste_raw = row[col_away]
+                domaci = row[col_home]
+                hoste = row[col_away]
                 datum = row[col_date]
                 
-                domaci_norm = normalizuj_nazev(domaci_raw)
-                hoste_norm = normalizuj_nazev(hoste_raw)
+                d_norm = normalizuj_nazev(domaci)
+                h_norm = normalizuj_nazev(hoste)
                 
-                info_d = db_sily.get(domaci_norm)
-                info_h = db_sily.get(hoste_norm)
+                info_d = db_sily.get(d_norm)
+                info_h = db_sily.get(h_norm)
                 
-                # Fallback vyhledávání
+                # Fallback
                 if not info_d:
-                    for k in db_sily:
-                        if domaci_norm in k or k in domaci_norm: info_d = db_sily[k]; break
+                    for k in db_sily: 
+                        if d_norm in k or k in d_norm: info_d = db_sily[k]; break
                 if not info_h:
-                    for k in db_sily:
-                        if hoste_norm in k or k in hoste_norm: info_h = db_sily[k]; break
-
+                    for k in db_sily: 
+                        if h_norm in k or k in h_norm: info_h = db_sily[k]; break
+                
                 with st.container():
                     c1, c2, c3 = st.columns([3, 2, 3])
-                    
                     if info_d and info_h:
-                        sila_d = info_d['sila'] + 10 
+                        sila_d = info_d['sila'] + 10
                         sila_h = info_h['sila']
-                        celkova = sila_d + sila_h
-                        proc_d = (sila_d / celkova) * 100
-                        proc_h = (sila_h / celkova) * 100
+                        celk = sila_d + sila_h
+                        pd_proc = (sila_d / celk) * 100
+                        ph_proc = (sila_h / celk) * 100
                         
-                        with c1:
-                            st.markdown(f"<h3 style='text-align: right'>{domaci_raw}</h3>", unsafe_allow_html=True)
-                            st.markdown(f"<p style='text-align: right'>{info_d['forma']}</p>", unsafe_allow_html=True)
-                        
+                        with c1: 
+                            st.markdown(f"<div style='text-align:right'><b>{domaci}</b><br>{info_d['forma']}</div>", unsafe_allow_html=True)
                         with c2:
-                            st.markdown(f"<p style='text-align: center'><b>{datum}</b></p>", unsafe_allow_html=True)
-                            st.markdown(f"<h4 style='text-align: center'>{int(proc_d)}% : {int(proc_h)}%</h4>", unsafe_allow_html=True)
-                            if proc_d > 60: st.success(f"Tip: {domaci_raw}")
-                            elif proc_h > 60: st.error(f"Tip: {hoste_raw}")
-                            else: st.warning("Tip: Remíza")
-                            
+                            st.markdown(f"<div style='text-align:center'>{datum}<br><h4>{int(pd_proc)}% : {int(ph_proc)}%</h4></div>", unsafe_allow_html=True)
                         with c3:
-                            st.markdown(f"<h3 style='text-align: left'>{hoste_raw}</h3>", unsafe_allow_html=True)
-                            st.markdown(f"<p style='text-align: left'>{info_h['forma']}</p>", unsafe_allow_html=True)
+                            st.markdown(f"<div style='text-align:left'><b>{hoste}</b><br>{info_h['forma']}</div>", unsafe_allow_html=True)
                     else:
-                        with c2: 
-                            st.write(f"{domaci_raw} vs {hoste_raw}")
-                            st.caption("Chybí historická data")
-                    
+                        with c2: st.write(f"{domaci} vs {hoste}")
                     st.markdown("---")
-    else:
-        st.error("Nepodařilo se najít sloupec s datem v souboru rozpisu.")
 else:
-    st.error("Nepodařilo se stáhnout soubor s rozpisem.")
-
-with st.expander("📊 Tabulka formy (Historie)"):
-    df_tabulka = pd.DataFrame.from_dict(db_sily, orient='index').sort_values(by='body', ascending=False)
-    st.dataframe(df_tabulka)
+    st.error(f"Data pro sezónu {rok_start}/{rok_konec} nejsou dostupná.")
+    st.write("Možné příčiny:")
+    st.write("1. Sezóna ještě nezačala (soubor na serveru neexistuje).")
+    st.write("2. Pokud jsi v budoucnosti (2026), ujisti se, že football-data.co.uk už nahrál soubor '2526'.")
