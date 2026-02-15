@@ -6,13 +6,15 @@ from datetime import datetime
 
 st.set_page_config(page_title="Universal Sport Predictor", layout="wide")
 
-# ==========================================\n# 1. MODUL: FOTBAL (WorldFootball.net)\n# ==========================================\n
+# ==========================================
+# 1. MODUL: FOTBAL (WorldFootball.net)
+# ==========================================
+
 def app_fotbal():
     st.header("⚽ Fotbalový Svět")
     st.caption("Zdroj: WorldFootball.net (Tabulky + Rozlosování)")
 
     # --- DEFINICE LIG (Slugy pro URL) ---
-    # Tady přidáváme vše, co jsi chtěl
     LIGY = {
         # Hlavní
         "🇬🇧 Premier League": "eng-premier-league",
@@ -66,21 +68,17 @@ def app_fotbal():
             # 1. Najít tabulku (Standings)
             df_table = None
             for df in dfs:
-                # Hledáme tabulku, která má sloupec "Team" a "Pt" (Body)
                 cols = [str(c).lower() for c in df.columns]
                 if any("team" in c for c in cols) and any("pt" in c for c in cols):
                     df_table = df
                     break
             
             # 2. Najít zápasy (Schedule)
-            # WorldFootball má často aktuální kolo jako tabulku, která má "-" ve skóre nebo čase
             df_matches = None
             for df in dfs:
                 if len(df.columns) >= 3:
-                    # Hledáme tabulku, kde je datum nebo čas a dva týmy
                     sample = str(df.iloc[0].values)
                     if ":" in sample or "-" in sample:
-                        # Pokud to není tabulka ligy (nemá body), je to asi rozpis
                         cols = [str(c).lower() for c in df.columns]
                         if not any("pt" in c for c in cols):
                             df_matches = df
@@ -101,10 +99,7 @@ def app_fotbal():
         # Zpracování tabulky pro sílu týmů
         sila_tymu = {}
         if df_tab is not None:
-            # Přejmenování sloupců
-            # WorldFootball: #, Team, M., W, D, L, Goals, Dif, Pt
             try:
-                # Najdeme správné indexy sloupců (občas se mění)
                 col_team = [c for c in df_tab.columns if "Team" in str(c) or "Tým" in str(c)][0]
                 col_pts = [c for c in df_tab.columns if "Pt" in str(c)][0]
                 col_goals = [c for c in df_tab.columns if "Goals" in str(c) or "Skóre" in str(c)][0]
@@ -113,18 +108,16 @@ def app_fotbal():
                     tym = str(row[col_team])
                     body = float(row[col_pts])
                     
-                    # Rozdíl skóre (např. 50:20)
                     goals = str(row[col_goals])
                     diff = 0
                     if ":" in goals:
                         g_pro, g_proti = map(int, goals.split(":"))
                         diff = g_pro - g_proti
                     
-                    # Síla = Body + (Rozdíl skóre / 2)
                     sila = body + (diff / 2)
                     sila_tymu[tym] = sila
             except:
-                st.warning("Nepodařilo se zpracovat detaily tabulky, predikce budou méně přesné.")
+                st.warning("Nepodařilo se zpracovat detaily tabulky.")
 
         # Zobrazení
         tab1, tab2 = st.tabs(["📅 Zápasy a Predikce", "📊 Tabulka"])
@@ -133,29 +126,21 @@ def app_fotbal():
             if df_match is not None:
                 st.subheader("Aktuální / Nadcházející kolo")
                 
-                # WorldFootball tabulka zápasů nemá hlavičky, jsou to indexy 0, 1, 2...
-                # Obvykle: 0=Čas, 1=Domácí, 2=Skóre/Pomlčka, 3=Hosté
-                
                 for idx, row in df_match.iterrows():
                     try:
-                        # Detekce sloupců
                         cas = str(row[0])
                         domaci = str(row[1])
-                        hoste = str(row[3]) # Obvykle index 3, někdy 2
+                        hoste = str(row[3]) 
                         
-                        # Pokud je to nadpis nebo prázdné
                         if "Team" in domaci or pd.isna(domaci): continue
                         
-                        # Hledání síly (Fuzzy matching, protože názvy se mohou lišit)
                         s_d = 0
                         s_h = 0
                         
-                        # Jednoduchý fuzzy match
                         for t_name, s_val in sila_tymu.items():
                             if domaci in t_name or t_name in domaci: s_d = s_val
                             if hoste in t_name or t_name in hoste: s_h = s_val
                         
-                        # Predikce
                         tip = ""
                         barva = "gray"
                         
@@ -179,14 +164,14 @@ def app_fotbal():
 
                         with st.container():
                             c1, c2, c3 = st.columns([3, 2, 3])
-                            with c1: st.markdown(f"<div style=\'text-align:right\'><b>{domaci}</b></div>", unsafe_allow_html=True)
+                            with c1: st.markdown(f"<div style='text-align:right'><b>{domaci}</b></div>", unsafe_allow_html=True)
                             with c2: 
-                                st.markdown(f"<div style=\'text-align:center\'>{cas}<br>VS</div>", unsafe_allow_html=True)
+                                st.markdown(f"<div style='text-align:center'>{cas}<br>VS</div>", unsafe_allow_html=True)
                                 if barva == "green": st.success(tip)
                                 elif barva == "red": st.error(tip)
                                 elif barva == "orange": st.warning(tip)
                                 else: st.caption(tip)
-                            with c3: st.markdown(f"<div style=\'text-align:left\'><b>{hoste}</b></div>", unsafe_allow_html=True)
+                            with c3: st.markdown(f"<div style='text-align:left'><b>{hoste}</b></div>", unsafe_allow_html=True)
                             st.markdown("---")
                     except: continue
             else:
@@ -199,14 +184,16 @@ def app_fotbal():
                 st.warning("Tabulka ligy nebyla nalezena.")
 
 
-# ==========================================\n# 2. MODUL: TENIS (BettingClosed)\n# ==========================================\n
+# ==========================================
+# 2. MODUL: TENIS (BettingClosed)
+# ==========================================
+
 def app_tenis():
     st.header("🎾 Tenisové Predikce")
     st.caption("Zdroj: BettingClosed.com (Dnešní zápasy)")
 
     @st.cache_data(ttl=1800)
     def scrape_bettingclosed():
-        # Tato stránka obsahuje přímo predikce
         url = "https://www.bettingclosed.com/predictions/date-matches/today/tennis/"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
@@ -219,30 +206,17 @@ def app_tenis():
             dfs = pd.read_html(r.text)
             
             matches = []
-            # BettingClosed má jednu hlavní tabulku se zápasy
-            # Musíme najít tu správnou
             for df in dfs:
-                # Převedeme na string
                 df_str = df.astype(str)
-                # Hledáme tabulku, která má hodně řádků a obsahuje predikce
                 if len(df) > 5:
-                    # Iterace
                     for idx, row in df_str.iterrows():
-                        # Struktura je složitá, zkusíme najít jména hráčů a predikci
-                        # Obvykle je to jeden dlouhý řetězec nebo rozdělené sloupce
                         row_text = " ".join(row.values)
                         
                         if "-" in row_text and ("1" in row_text or "2" in row_text):
-                            # Pokus o extrakci
-                            # Toto je velmi hrubý odhad, protože každá tabulka je jiná
-                            # Ale BettingClosed často dává predikci do posledního sloupce
-                            
-                            # Zkusíme najít dva hráče
-                            # Většinou sloupec 1 nebo 2
                             try:
                                 cas = row[0]
-                                zapas = row[2] # Často jména hráčů
-                                predikce = row.iloc[-1] # Poslední sloupec bývá predikce
+                                zapas = row[2] 
+                                predikce = row.iloc[-1] 
                                 
                                 if len(zapas) > 5 and "-" in zapas:
                                     matches.append({
@@ -252,7 +226,7 @@ def app_tenis():
                                     })
                             except: continue
                     
-                    if len(matches) > 0: break # Našli jsme tabulku
+                    if len(matches) > 0: break 
             
             return matches, None
             
@@ -275,17 +249,19 @@ def app_tenis():
             with st.container():
                 c1, c2 = st.columns([3, 1])
                 with c1:
-                    st.write(f"**{m[\'Zápas\']}**")
-                    st.caption(f"Čas: {m[\'Čas\']}")
+                    st.write(f"**{m['Zápas']}**")
+                    st.caption(f"Čas: {m['Čas']}")
                 with c2:
-                    # Zvýraznění predikce
-                    pred = str(m[\'Predikce\']).lower()
+                    pred = str(m['Predikce']).lower()
                     if "1" in pred: st.success("Tip: Domácí (1)")
                     elif "2" in pred: st.error("Tip: Hosté (2)")
-                    else: st.info(f"Tip: {m[\'Predikce\']}")
+                    else: st.info(f"Tip: {m['Predikce']}")
                 st.markdown("---")
 
-# ==========================================\n# HLAVNÍ ROZCESTNÍK\n# ==========================================\n
+# ==========================================
+# HLAVNÍ ROZCESTNÍK
+# ==========================================
+
 st.sidebar.title("🏆 Sportovní Centrum")
 sport = st.sidebar.radio("Vyber sport:", ["⚽ Fotbal", "🎾 Tenis"])
 
