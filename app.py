@@ -1,84 +1,102 @@
 import streamlit as st
 import pandas as pd
-import cloudscraper # TOTO JE TA NOVÁ KNIHOVNA
-import time
+import requests
+import io
+from datetime import datetime
 
-st.set_page_config(page_title="FBref Scraper Pro", layout="wide")
+st.set_page_config(page_title="Hybrid Analyzer", layout="wide")
 
-# --- KONFIGURACE URL (FBref) ---
-LIGY_URL = {
-    "🇬🇧 Premier League": "https://fbref.com/en/comps/9/schedule/Premier-League-Scores-and-Fixtures",
-    "🇬🇧 Championship": "https://fbref.com/en/comps/10/schedule/Championship-Scores-and-Fixtures",
-    "🇪🇸 La Liga": "https://fbref.com/en/comps/12/schedule/La-Liga-Scores-and-Fixtures",
-    "🇩🇪 Bundesliga": "https://fbref.com/en/comps/20/schedule/Bundesliga-Scores-and-Fixtures",
-    "🇮🇹 Serie A": "https://fbref.com/en/comps/11/schedule/Serie-A-Scores-and-Fixtures",
-    "🇫🇷 Ligue 1": "https://fbref.com/en/comps/13/schedule/Ligue-1-Scores-and-Fixtures",
-    "🇳🇱 Eredivisie": "https://fbref.com/en/comps/23/schedule/Eredivisie-Scores-and-Fixtures",
-    "🇵🇹 Primeira Liga": "https://fbref.com/en/comps/32/schedule/Primeira-Liga-Scores-and-Fixtures",
-    "🇧🇪 Pro League (Belgie)": "https://fbref.com/en/comps/37/schedule/Belgian-Pro-League-Scores-and-Fixtures",
-    "🇨🇿 Fortuna Liga": "https://fbref.com/en/comps/38/schedule/Czech-First-League-Scores-and-Fixtures"
+# --- KONFIGURACE ZDROJŮ DAT (CSV) ---
+# Zde definujeme odkazy na soubory pro různé ligy
+# History: football-data.co.uk (E0 = Premier League, D1 = Bundesliga, atd.)
+# Future: fixturedownload.com
+LIGY_CONFIG = {
+    "🇬🇧 Premier League": {
+        "history": "https://www.football-data.co.uk/mmz4281/2425/E0.csv",
+        "future": "https://fixturedownload.com/download/epl-2024-GMTStandardTime.csv"
+    },
+    "🇬🇧 Championship": {
+        "history": "https://www.football-data.co.uk/mmz4281/2425/E1.csv",
+        "future": "https://fixturedownload.com/download/championship-2024-GMTStandardTime.csv"
+    },
+    "🇩🇪 Bundesliga": {
+        "history": "https://www.football-data.co.uk/mmz4281/2425/D1.csv",
+        "future": "https://fixturedownload.com/download/bundesliga-2024-UTC.csv"
+    },
+    "🇪🇸 La Liga": {
+        "history": "https://www.football-data.co.uk/mmz4281/2425/SP1.csv",
+        "future": "https://fixturedownload.com/download/la-liga-2024-UTC.csv"
+    },
+    "🇮🇹 Serie A": {
+        "history": "https://www.football-data.co.uk/mmz4281/2425/I1.csv",
+        "future": "https://fixturedownload.com/download/serie-a-2024-UTC.csv"
+    },
+    "🇫🇷 Ligue 1": {
+        "history": "https://www.football-data.co.uk/mmz4281/2425/F1.csv",
+        "future": "https://fixturedownload.com/download/ligue-1-2024-UTC.csv"
+    }
 }
 
-# --- SIDEBAR ---
-st.sidebar.title("Nastavení")
-vybrana_liga = st.sidebar.selectbox("Soutěž:", list(LIGY_URL.keys()))
-url = LIGY_URL[vybrana_liga]
+# --- POMOCNÁ FUNKCE: PŘEKLADAČ TÝMŮ ---
+# Protože každý zdroj má jiné názvy (Man City vs Manchester City), musíme je sjednotit.
+# Toto je jednoduchá verze, která porovnává prvních 4-5 písmen.
+def normalizuj_nazev(nazev):
+    if not isinstance(nazev, str): return ""
+    nazev = nazev.lower().strip()
+    # Manuální opravy pro nejčastější rozdíly
+    mapping = {
+        "man city": "manchester city",
+        "man utd": "manchester united",
+        "man united": "manchester united",
+        "leicester": "leicester city",
+        "leeds": "leeds united",
+        "notts forest": "nottingham forest",
+        "nott'm forest": "nottingham forest",
+        "wolves": "wolverhampton wanderers",
+        "wolverhampton": "wolverhampton wanderers",
+        "brighton": "brighton & hove albion",
+        "spurs": "tottenham hotspur",
+        "tottenham": "tottenham hotspur",
+        "west ham": "west ham united",
+        "newcastle": "newcastle united"
+    }
+    return mapping.get(nazev, nazev)
 
-st.sidebar.info("Používám Cloudscraper pro obejití ochrany 403.")
-
-# --- FUNKCE PRO SCRAPING ---
-@st.cache_data(ttl=3600) 
-def scrape_fbref_pro(url):
-    # Vytvoříme scraper, který se tváří jako Chrome
-    scraper = cloudscraper.create_scraper()
+# --- FUNKCE PRO STAŽENÍ DAT ---
+@st.cache_data(ttl=3600)
+def nacti_data(liga_nazev):
+    urls = LIGY_CONFIG[liga_nazev]
     
+    # 1. Stažení HISTORIE (Výsledky)
     try:
-        # Zkusíme stáhnout stránku
-        response = scraper.get(url)
-        
-        if response.status_code == 429:
-            return None, None, "⛔ Too Many Requests (429). FBref nás dočasně zablokoval. Zkus to za hodinu."
-        if response.status_code == 403:
-            return None, None, "⛔ Access Denied (403). Ani Cloudscraper neprošel přes ochranu FBref."
-        if response.status_code != 200:
-            return None, None, f"Chyba připojení: {response.status_code}"
-
-        # Pandas najde tabulky
-        dfs = pd.read_html(response.text)
-        df = dfs[0]
-        
-        # Vyčištění dat (odstranění mezititulků)
-        df = df[df["Wk"] != "Wk"]
-        
-        # Kontrola sloupce Score
-        if "Score" not in df.columns:
-            return None, None, "Tabulka nemá sloupec Score. Struktura webu se změnila."
-            
-        # Rozdělení na odehrané a budoucí
-        odehrane = df[df["Score"].notna()].copy()
-        budouci = df[df["Score"].isna()].copy()
-        
-        return odehrane, budouci, None
-
+        r_hist = requests.get(urls["history"])
+        r_hist.raise_for_status() # Ověří, že nenastala chyba
+        df_hist = pd.read_csv(io.StringIO(r_hist.text))
     except Exception as e:
-        return None, None, f"Chyba scrapingu: {e}"
+        return None, None, f"Chyba stahování historie: {e}"
 
-# --- VÝPOČET TABULKY ---
-def vypocitej_tabulku(df_odehrane):
+    # 2. Stažení BUDOUCNOSTI (Rozpis)
+    try:
+        r_fut = requests.get(urls["future"])
+        r_fut.raise_for_status()
+        df_fut = pd.read_csv(io.StringIO(r_fut.text))
+    except Exception as e:
+        return None, None, f"Chyba stahování rozpisu: {e}"
+        
+    return df_hist, df_fut, None
+
+# --- VÝPOČET SÍLY TÝMŮ ---
+def analyzuj_silu(df_hist):
     tymy = {}
     
-    for index, row in df_odehrane.iterrows():
-        domaci = row["Home"]
-        hoste = row["Away"]
-        skore = row["Score"]
+    # Projdeme všechny odehrané zápasy
+    for index, row in df_hist.iterrows():
+        # football-data.co.uk používá sloupce: HomeTeam, AwayTeam, FTR (Full Time Result), FTHG (Home Goals), FTAG (Away Goals)
+        if pd.isna(row['FTR']): continue # Přeskočit neodehrané
         
-        if pd.isna(skore) or "–" not in str(skore): continue
-        
-        # FBref používá pomlčku "–", ne mínus "-"
-        try:
-            goly_d, goly_h = map(int, str(skore).split("–")[:2])
-        except ValueError:
-            continue # Přeskočíme řádky, kde nejde přečíst skóre
+        domaci = normalizuj_nazev(row['HomeTeam'])
+        hoste = normalizuj_nazev(row['AwayTeam'])
+        vysledek = row['FTR'] # H (Home), A (Away), D (Draw)
         
         if domaci not in tymy: tymy[domaci] = {"Body": 0, "Z": 0, "Forma": []}
         if hoste not in tymy: tymy[hoste] = {"Body": 0, "Z": 0, "Forma": []}
@@ -86,100 +104,136 @@ def vypocitej_tabulku(df_odehrane):
         tymy[domaci]["Z"] += 1
         tymy[hoste]["Z"] += 1
         
-        if goly_d > goly_h: 
+        if vysledek == 'H':
             tymy[domaci]["Body"] += 3
             tymy[domaci]["Forma"].append("W")
             tymy[hoste]["Forma"].append("L")
-        elif goly_h > goly_d: 
+        elif vysledek == 'A':
             tymy[hoste]["Body"] += 3
             tymy[hoste]["Forma"].append("W")
             tymy[domaci]["Forma"].append("L")
-        else: 
+        else:
             tymy[domaci]["Body"] += 1
             tymy[hoste]["Body"] += 1
             tymy[domaci]["Forma"].append("D")
             tymy[hoste]["Forma"].append("D")
             
-    seznam = []
+    # Finální výpočet síly
+    databaze_sily = {}
     for nazev, data in tymy.items():
-        forma_list = data["Forma"][-5:]
+        forma_list = data["Forma"][-5:] # Posledních 5
         forma_str = "".join(forma_list)
+        
+        # Algoritmus síly: Body + Bonus za formu
         bonus = forma_str.count("W") * 3 + forma_str.count("D") * 1
         sila = data["Body"] + bonus
         
-        seznam.append({
-            "Tým": nazev,
-            "Zápasy": data["Z"],
-            "Body": data["Body"],
-            "Forma": forma_str,
-            "Síla": sila
-        })
+        databaze_sily[nazev] = {
+            "sila": sila,
+            "forma": forma_str.replace("W", "🟢").replace("L", "🔴").replace("D", "⚪"),
+            "body": data["Body"],
+            "zapasy": data["Z"]
+        }
         
-    df_tab = pd.DataFrame(seznam).sort_values(by="Body", ascending=False).reset_index(drop=True)
-    df_tab.index += 1
-    return df_tab
+    return databaze_sily
 
 # --- UI APLIKACE ---
-st.title(f"⚽ {vybrana_liga}")
-st.caption("Zdroj dat: FBref.com (Bypassing 403 Protection)")
+st.title("⚽ Hybridní Analytik (CSV Metoda)")
+st.caption("Data: football-data.co.uk (Historie) + fixturedownload.com (Budoucnost)")
 
-with st.spinner("Stahuji data (Cloudscraper)..."):
-    df_odehrane, df_budouci, error = scrape_fbref_pro(url)
+# Sidebar
+vybrana_liga = st.sidebar.selectbox("Vyber ligu:", list(LIGY_CONFIG.keys()))
+
+# Načtení dat
+with st.spinner("Stahuji a propojuji CSV soubory..."):
+    df_hist, df_fut, error = nacti_data(vybrana_liga)
 
 if error:
     st.error(error)
-    st.write("Pokud vidíš chybu 403 i s Cloudscraperem, FBref má extrémně silnou ochranu.")
 else:
-    df_tabulka = vypocitej_tabulku(df_odehrane)
-    sila_db = df_tabulka.set_index("Tým")["Síla"].to_dict()
-    forma_db = df_tabulka.set_index("Tým")["Forma"].to_dict()
-
-    tab1, tab2 = st.tabs(["🔮 Predikce", "📊 Tabulka"])
+    # 1. Analýza historie
+    db_sily = analyzuj_silu(df_hist)
     
-    with tab1:
-        if df_budouci is not None and not df_budouci.empty:
-            st.write(f"Nalezeno {len(df_budouci)} budoucích zápasů.")
-            
-            for index, row in df_budouci.head(20).iterrows():
-                domaci = row["Home"]
-                hoste = row["Away"]
-                datum = row["Date"]
-                cas = row["Time"]
-                
-                sila_d = sila_db.get(domaci, 0)
-                sila_h = sila_db.get(hoste, 0)
-                forma_d = forma_db.get(domaci, "")
-                forma_h = forma_db.get(hoste, "")
-                
-                def viz_forma(f): return f.replace("W", "🟢").replace("L", "🔴").replace("D", "⚪")
-                
-                with st.container():
-                    c1, c2, c3, c4, c5 = st.columns([1, 3, 2, 3, 1])
-                    
-                    if sila_d > 0 and sila_h > 0:
-                        sila_d_total = sila_d + 10 
-                        celkova = sila_d_total + sila_h
-                        proc_d = (sila_d_total / celkova) * 100
-                        proc_h = (sila_h / celkova) * 100
-                        
-                        with c2: 
-                            st.write(f"**{domaci}**")
-                            st.caption(viz_forma(forma_d))
-                        with c3:
-                            st.write(f"{datum} {cas}")
-                            st.markdown(f"#### {int(proc_d)}% : {int(proc_h)}%")
-                            if proc_d > 60: st.success(f"Tip: {domaci}")
-                            elif proc_h > 60: st.error(f"Tip: {hoste}")
-                            else: st.warning("Tip: Remíza")
-                        with c4:
-                            st.write(f"**{hoste}**")
-                            st.caption(viz_forma(forma_h))
-                    else:
-                        with c3: st.write(f"{domaci} vs {hoste}")
-                    
-                    st.markdown("---")
-        else:
-            st.info("Žádné budoucí zápasy nenalezeny.")
+    # 2. Zpracování budoucnosti
+    # fixturedownload.com má sloupce: Date, Home Team, Away Team
+    
+    # Filtrujeme jen budoucí zápasy (jednoduchý filtr: ty, co nejsou v historii)
+    # Ale lepší je vzít prostě vše z "future" souboru a najít ty nejbližší podle data
+    df_fut['DateObj'] = pd.to_datetime(df_fut['Date'], format='%d/%m/%Y %H:%M', errors='coerce')
+    
+    # Pokud formát data nesedí, zkusíme jiný (občas se mění)
+    if df_fut['DateObj'].isnull().all():
+         df_fut['DateObj'] = pd.to_datetime(df_fut['Date'], errors='coerce')
 
-    with tab2:
-        st.dataframe(df_tabulka, use_container_width=True)
+    dnes = datetime.now()
+    # Bereme jen zápasy od dneška dál
+    budouci_zapasy = df_fut[df_fut['DateObj'] >= dnes].sort_values(by='DateObj')
+    
+    if budouci_zapasy.empty:
+        st.warning("V souboru s rozpisem nebyly nalezeny žádné budoucí zápasy.")
+    else:
+        st.subheader(f"🔮 Predikce: {vybrana_liga}")
+        st.write(f"Analyzováno {len(df_hist)} odehraných zápasů pro výpočet formy.")
+        
+        # Zobrazíme nejbližších 10 zápasů
+        for index, row in budouci_zapasy.head(10).iterrows():
+            domaci_raw = row['Home Team']
+            hoste_raw = row['Away Team']
+            datum = row['Date']
+            
+            # Normalizace názvů pro vyhledání v databázi
+            domaci_norm = normalizuj_nazev(domaci_raw)
+            hoste_norm = normalizuj_nazev(hoste_raw)
+            
+            # Vyhledání síly
+            info_d = db_sily.get(domaci_norm)
+            info_h = db_sily.get(hoste_norm)
+            
+            # Pokud nenajdeme přesnou shodu, zkusíme najít "podobný" název (fallback)
+            if not info_d:
+                for k in db_sily:
+                    if domaci_norm in k or k in domaci_norm:
+                        info_d = db_sily[k]; break
+            if not info_h:
+                for k in db_sily:
+                    if hoste_norm in k or k in hoste_norm:
+                        info_h = db_sily[k]; break
+
+            with st.container():
+                c1, c2, c3 = st.columns([3, 2, 3])
+                
+                # Máme data o obou týmech?
+                if info_d and info_h:
+                    sila_d = info_d['sila'] + 10 # Domácí výhoda
+                    sila_h = info_h['sila']
+                    celkova = sila_d + sila_h
+                    proc_d = (sila_d / celkova) * 100
+                    proc_h = (sila_h / celkova) * 100
+                    
+                    with c1:
+                        st.markdown(f"<h3 style='text-align: right'>{domaci_raw}</h3>", unsafe_allow_html=True)
+                        st.markdown(f"<p style='text-align: right'>{info_d['forma']}</p>", unsafe_allow_html=True)
+                    
+                    with c2:
+                        st.markdown(f"<p style='text-align: center'><b>{datum}</b></p>", unsafe_allow_html=True)
+                        st.markdown(f"<h4 style='text-align: center'>{int(proc_d)}% : {int(proc_h)}%</h4>", unsafe_allow_html=True)
+                        if proc_d > 60: st.success(f"Tip: {domaci_raw}")
+                        elif proc_h > 60: st.error(f"Tip: {hoste_raw}")
+                        else: st.warning("Tip: Remíza")
+                        
+                    with c3:
+                        st.markdown(f"<h3 style='text-align: left'>{hoste_raw}</h3>", unsafe_allow_html=True)
+                        st.markdown(f"<p style='text-align: left'>{info_h['forma']}</p>", unsafe_allow_html=True)
+                
+                else:
+                    # Pokud se nepodařilo spárovat názvy týmů
+                    with c2: 
+                        st.write(f"{domaci_raw} vs {hoste_raw}")
+                        st.caption("Chybí historická data (rozdílné názvy týmů)")
+                
+                st.markdown("---")
+
+    # Tabulka pro kontrolu
+    with st.expander("📊 Zobrazit tabulku formy"):
+        df_tabulka = pd.DataFrame.from_dict(db_sily, orient='index').sort_values(by='body', ascending=False)
+        st.dataframe(df_tabulka)
