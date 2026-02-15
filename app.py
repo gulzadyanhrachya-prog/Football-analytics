@@ -3,8 +3,7 @@ import pandas as pd
 import requests
 from datetime import datetime
 
-# --- KONFIGURACE ---
-try:
+# --- KONFIGURACE ---\ntry:
     API_KEY = st.secrets["FOOTBALL_API_KEY"]
 except FileNotFoundError:
     st.error("Chybí API klíč v Secrets!")
@@ -15,8 +14,7 @@ HEADERS = {'X-Auth-Token': API_KEY}
 
 st.set_page_config(page_title="Betting Pro", layout="wide")
 
-# --- FUNKCE ---
-
+# --- FUNKCE ---\n
 @st.cache_data(ttl=600)
 def nacti_data_ligy():
     # Stáhneme tabulku včetně log týmů
@@ -30,16 +28,23 @@ def nacti_data_ligy():
     tabulka = data['standings'][0]['table']
     
     # Uložíme si data o týmech do slovníku pro rychlé vyhledávání
-    # Klíč = Název týmu, Hodnota = {Síla, Logo URL}
     tymy_info = {}
     for radek in tabulka:
         tym = radek['team']['name']
         logo = radek['team']['crest']
         body = radek['points']
-        forma = radek.get('form', "")
+        
+        # --- OPRAVA CHYBY ZDE ---
+        # Získáme formu, ale pokud je None (null), nahradíme ji prázdným řetězcem ""
+        raw_form = radek.get('form')
+        if raw_form is None:
+            forma = ""
+        else:
+            forma = raw_form
         
         # Výpočet síly (Body + Bonus za formu)
-        bonus = forma.count("W") * 3 # Zvýšili jsme váhu formy na 3 body
+        # Teď už 'forma' je vždy text, takže .count() nespadne
+        bonus = forma.count("W") * 3 
         sila = body + bonus
         
         tymy_info[tym] = {
@@ -57,8 +62,7 @@ def nacti_zapasy():
         return []
     return response.json()['matches']
 
-# --- UI APLIKACE ---
-
+# --- UI APLIKACE ---\n
 st.title("⚽ Premier League: Smart Betting")
 st.markdown("---")
 
@@ -67,7 +71,7 @@ with st.spinner('Stahuji data a loga týmů...'):
     tymy_db = nacti_data_ligy()
 
 if not tymy_db:
-    st.error("Chyba při stahování dat.")
+    st.error("Chyba při stahování dat. Zkontroluj API klíč nebo dostupnost služby.")
     st.stop()
 
 # 2. Načtení zápasů
@@ -88,19 +92,29 @@ else:
         info_domaci = tymy_db.get(domaci)
         info_hoste = tymy_db.get(hoste)
         
+        # Zobrazíme jen pokud máme data o obou týmech
         if info_domaci and info_hoste:
             # --- MATEMATIKA SÁZENÍ ---
-            sila_d = info_domaci['sila'] + 10 # Domácí výhoda (zvýšena)
+            sila_d = info_domaci['sila'] + 10 # Domácí výhoda
             sila_h = info_hoste['sila']
             
             celkova_sila = sila_d + sila_h
-            sance_domaci = (sila_d / celkova_sila) * 100
-            sance_hoste = (sila_h / celkova_sila) * 100
             
-            # Výpočet férového kurzu (1 / pravděpodobnost)
-            # Příklad: 50% šance = kurz 2.00
-            kurz_domaci = 100 / sance_domaci
-            kurz_hoste = 100 / sance_hoste
+            # Ošetření dělení nulou (kdyby náhodou měli oba 0 bodů)
+            if celkova_sila == 0:
+                sance_domaci = 50
+                sance_hoste = 50
+            else:
+                sance_domaci = (sila_d / celkova_sila) * 100
+                sance_hoste = (sila_h / celkova_sila) * 100
+            
+            # Výpočet férového kurzu
+            try:
+                kurz_domaci = 100 / sance_domaci
+                kurz_hoste = 100 / sance_hoste
+            except ZeroDivisionError:
+                kurz_domaci = 0
+                kurz_hoste = 0
             
             # --- VIZUALIZACE KARTY ZÁPASU ---
             with st.container():
