@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import requests
+import cloudscraper # TOTO JE KLÍČ K ÚSPĚCHU
 import numpy as np
 from datetime import datetime
 
@@ -12,7 +12,7 @@ st.set_page_config(page_title="Universal Sport Predictor", layout="wide")
 
 def app_fotbal():
     st.header("⚽ Fotbalový Svět")
-    st.caption("Zdroj: WorldFootball.net (Tabulky + Rozlosování)")
+    st.caption("Zdroj: WorldFootball.net (Bypassing 403 Protection)")
 
     # --- DEFINICE LIG (Slugy pro URL) ---
     LIGY = {
@@ -50,14 +50,16 @@ def app_fotbal():
     slug = LIGY[vybrana_liga]
     sezona_str = f"{rok}-{rok+1}"
 
-    # --- SCRAPING FUNKCE ---
+    # --- SCRAPING FUNKCE (S Cloudscraperem) ---
     @st.cache_data(ttl=3600)
     def scrape_worldfootball(league_slug, season):
         url = f"https://www.worldfootball.net/competition/{league_slug}-{season}/"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+        
+        # Vytvoříme maskovaného robota
+        scraper = cloudscraper.create_scraper()
         
         try:
-            r = requests.get(url, headers=headers)
+            r = scraper.get(url)
             if r.status_code == 404:
                 return None, None, f"Sezóna {season} pro tuto ligu ještě neexistuje."
             if r.status_code != 200:
@@ -185,7 +187,7 @@ def app_fotbal():
 
 
 # ==========================================
-# 2. MODUL: TENIS (BettingClosed)
+# 2. MODUL: TENIS (BettingClosed s Cloudscraperem)
 # ==========================================
 
 def app_tenis():
@@ -195,12 +197,12 @@ def app_tenis():
     @st.cache_data(ttl=1800)
     def scrape_bettingclosed():
         url = "https://www.bettingclosed.com/predictions/date-matches/today/tennis/"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
+        
+        # Použijeme Cloudscraper i zde
+        scraper = cloudscraper.create_scraper()
         
         try:
-            r = requests.get(url, headers=headers)
+            r = scraper.get(url)
             if r.status_code != 200: return [], f"Chyba {r.status_code}"
             
             dfs = pd.read_html(r.text)
@@ -233,15 +235,13 @@ def app_tenis():
         except Exception as e:
             return [], str(e)
 
-    with st.spinner("Stahuji tenisové tipy z BettingClosed..."):
+    with st.spinner("Stahuji tenisové tipy..."):
         matches, error = scrape_bettingclosed()
 
     if error:
         st.error(f"Chyba: {error}")
     elif not matches:
         st.warning("Nepodařilo se načíst zápasy. Web mohl změnit strukturu.")
-        st.write("Zkusíme alternativní zdroj: **TennisExplorer (Schedule)**")
-        st.markdown("[Otevřít TennisExplorer Schedule](https://www.tennisexplorer.com/matches/)")
     else:
         st.success(f"Nalezeno {len(matches)} zápasů s predikcí.")
         
