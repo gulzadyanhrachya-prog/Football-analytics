@@ -1,116 +1,205 @@
 import streamlit as st
 import pandas as pd
 import requests
+import time
+import numpy as np
 
-st.set_page_config(page_title="Scraping Master 2026", layout="wide")
+st.set_page_config(page_title="FBref Scraper", layout="wide")
 
-# --- KONFIGURACE URL ADRES ---
-# Mapování názvů lig na URL slugy webu WorldFootball.net
+# --- KONFIGURACE URL (FBref) ---
+# FBref má specifické URL pro každou ligu. 
+# Tyto URL vedou na stránku "Scores & Fixtures" aktuální sezóny.
 LIGY_URL = {
-    "🇬🇧 Premier League": "eng-premier-league",
-    "🇬🇧 Championship": "eng-championship",
-    "🇨🇿 Fortuna Liga": "cze-1-liga",
-    "🇩🇪 Bundesliga": "ger-bundesliga",
-    "🇩🇪 2. Bundesliga": "ger-2-bundesliga",
-    "🇪🇸 La Liga": "esp-primera-division",
-    "🇪🇸 La Liga 2": "esp-segunda-division",
-    "🇮🇹 Serie A": "ita-serie-a",
-    "🇮🇹 Serie B": "ita-serie-b",
-    "🇫🇷 Ligue 1": "fra-ligue-1",
-    "🇳🇱 Eredivisie": "ned-eredivisie",
-    "🇪🇺 Liga Mistrů": "champions-league"
+    "🇬🇧 Premier League": "https://fbref.com/en/comps/9/schedule/Premier-League-Scores-and-Fixtures",
+    "🇬🇧 Championship": "https://fbref.com/en/comps/10/schedule/Championship-Scores-and-Fixtures",
+    "🇪🇸 La Liga": "https://fbref.com/en/comps/12/schedule/La-Liga-Scores-and-Fixtures",
+    "🇩🇪 Bundesliga": "https://fbref.com/en/comps/20/schedule/Bundesliga-Scores-and-Fixtures",
+    "🇮🇹 Serie A": "https://fbref.com/en/comps/11/schedule/Serie-A-Scores-and-Fixtures",
+    "🇫🇷 Ligue 1": "https://fbref.com/en/comps/13/schedule/Ligue-1-Scores-and-Fixtures",
+    "🇳🇱 Eredivisie": "https://fbref.com/en/comps/23/schedule/Eredivisie-Scores-and-Fixtures",
+    "🇵🇹 Primeira Liga": "https://fbref.com/en/comps/32/schedule/Primeira-Liga-Scores-and-Fixtures",
+    "🇧🇪 Pro League (Belgie)": "https://fbref.com/en/comps/37/schedule/Belgian-Pro-League-Scores-and-Fixtures",
+    "🇨🇿 Fortuna Liga": "https://fbref.com/en/comps/38/schedule/Czech-First-League-Scores-and-Fixtures"
 }
 
 # --- SIDEBAR ---
 st.sidebar.title("Nastavení")
 vybrana_liga = st.sidebar.selectbox("Soutěž:", list(LIGY_URL.keys()))
-url_slug = LIGY_URL[vybrana_liga]
+url = LIGY_URL[vybrana_liga]
 
-# PŘIDÁNO: Možnost vybrat rok 2025 (pro sezónu 25/26)
-rok = st.sidebar.selectbox("Sezóna (Rok startu):", [2025, 2024, 2023], index=0)
-sezona_str = f"{rok}-{rok+1}"
-
-st.sidebar.info(f"Hledám data na adrese: worldfootball.net/competition/{url_slug}-{sezona_str}/")
+st.sidebar.warning("⚠️ FBref má přísné limity! Neobnovuj stránku příliš často, jinak dostaneš ban na 1 hodinu (Error 429).")
 
 # --- FUNKCE PRO SCRAPING ---
-@st.cache_data(ttl=3600) 
-def scrape_data(league_slug, season_str):
-    # Sestavení URL
-    base_url = f"https://www.worldfootball.net/competition/{league_slug}-{season_str}"
-    
-    # Hlavička prohlížeče (aby nás web nezablokoval)
+@st.cache_data(ttl=3600) # Ukládáme do paměti na 1 hodinu
+def scrape_fbref(url):
+    # Simulace prohlížeče
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
     
     try:
-        response = requests.get(base_url, headers=headers)
+        # Zpomalení, abychom nebyli podezřelí
+        time.sleep(1) 
         
-        # Kontrola, zda stránka existuje
-        if response.status_code == 404:
-            return None, None, f"Stránka pro sezónu {season_str} nebyla nalezena (Chyba 404). Pravděpodobně ještě není vytvořena."
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 429:
+            return None, None, "⛔ Too Many Requests (429). FBref tě dočasně zablokoval. Zkus to za hodinu."
         if response.status_code != 200:
             return None, None, f"Chyba připojení: {response.status_code}"
 
-        # Pandas najde tabulky v HTML
+        # Pandas najde tabulky
         dfs = pd.read_html(response.text)
         
-        # 1. Hledání tabulky ligy
-        tabulka_df = None
-        for df in dfs:
-            # Hledáme tabulku, která má sloupce jako Team, Pt, Pts, nebo #
-            cols = [c.lower() for c in df.columns]
-            if any("team" in c for c in cols) and (any("pt" in c for c in cols) or "goals" in cols):
-                tabulka_df = df
-                break
+        # Na stránce "Scores & Fixtures" je to obvykle hned první tabulka
+        df = dfs[0]
         
-        # 2. Hledání zápasů (Aktuální kolo)
-        zapasy_df = None
-        for df in dfs:
-            # Tabulka zápasů má obvykle 3 sloupce (Domácí, Skóre, Hosté) a čas
-            if len(df.columns) >= 5 and df.shape[0] > 0:
-                # Heuristika: Hledáme pomlčku v datech (skóre nebo čas)
-                if df.iloc[0].astype(str).str.contains("-").any():
-                     zapasy_df = df
-                     break
+        # Vyčištění dat
+        # FBref občas vkládá hlavičku doprostřed tabulky, musíme odstranit řádky, kde je "Wk" (Week)
+        df = df[df["Wk"] != "Wk"]
         
-        return tabulka_df, zapasy_df, None
+        # Rozdělení na odehrané (mají výsledek ve sloupci Score) a budoucí
+        # Sloupec se jmenuje "Score"
+        if "Score" not in df.columns:
+            return None, None, "Tabulka nemá sloupec Score. Struktura webu se změnila."
+            
+        # Odehrané zápasy (mají skóre, např. "2–1")
+        odehrane = df[df["Score"].notna()].copy()
+        
+        # Budoucí zápasy (nemají skóre)
+        budouci = df[df["Score"].isna()].copy()
+        
+        return odehrane, budouci, None
 
-    except ValueError:
-        return None, None, "Na stránce nebyla nalezena žádná tabulka (ValueError)."
     except Exception as e:
         return None, None, f"Chyba scrapingu: {e}"
 
+# --- VÝPOČET FORMY A TABULKY ---
+def vypocitej_tabulku(df_odehrane):
+    tymy = {}
+    
+    for index, row in df_odehrane.iterrows():
+        domaci = row["Home"]
+        hoste = row["Away"]
+        skore = row["Score"]
+        
+        # Ošetření pro prázdné skóre (kdyby náhodou)
+        if pd.isna(skore) or "–" not in str(skore): continue
+        
+        goly_d, goly_h = map(int, str(skore).split("–")[:2])
+        
+        # Inicializace týmů ve slovníku
+        if domaci not in tymy: tymy[domaci] = {"Body": 0, "Z": 0, "Forma": []}
+        if hoste not in tymy: tymy[hoste] = {"Body": 0, "Z": 0, "Forma": []}
+        
+        tymy[domaci]["Z"] += 1
+        tymy[hoste]["Z"] += 1
+        
+        if goly_d > goly_h: # Výhra domácích
+            tymy[domaci]["Body"] += 3
+            tymy[domaci]["Forma"].append("W")
+            tymy[hoste]["Forma"].append("L")
+        elif goly_h > goly_d: # Výhra hostů
+            tymy[hoste]["Body"] += 3
+            tymy[hoste]["Forma"].append("W")
+            tymy[domaci]["Forma"].append("L")
+        else: # Remíza
+            tymy[domaci]["Body"] += 1
+            tymy[hoste]["Body"] += 1
+            tymy[domaci]["Forma"].append("D")
+            tymy[hoste]["Forma"].append("D")
+            
+    # Převod na DataFrame
+    seznam = []
+    for nazev, data in tymy.items():
+        # Forma - posledních 5 zápasů
+        forma_list = data["Forma"][-5:]
+        forma_str = "".join(forma_list)
+        
+        # Výpočet síly pro predikci
+        bonus = forma_str.count("W") * 3 + forma_str.count("D") * 1
+        sila = data["Body"] + bonus
+        
+        seznam.append({
+            "Tým": nazev,
+            "Zápasy": data["Z"],
+            "Body": data["Body"],
+            "Forma": forma_str,
+            "Síla": sila
+        })
+        
+    df_tab = pd.DataFrame(seznam).sort_values(by="Body", ascending=False).reset_index(drop=True)
+    df_tab.index += 1 # Aby pořadí začínalo od 1
+    return df_tab
+
 # --- UI APLIKACE ---
 st.title(f"⚽ {vybrana_liga}")
-st.caption(f"Sezóna {sezona_str}")
+st.caption("Zdroj dat: FBref.com (Scores & Fixtures)")
 
-with st.spinner(f"Stahuji data pro sezónu {sezona_str}..."):
-    df_tabulka, df_zapasy, error = scrape_data(url_slug, sezona_str)
+with st.spinner("Stahuji data z FBref..."):
+    df_odehrane, df_budouci, error = scrape_fbref(url)
 
 if error:
     st.error(error)
-    st.write("Možné řešení:")
-    st.write("1. Zkus přepnout na starší sezónu (2024), abys ověřil, že scraper funguje.")
-    st.write("2. Pokud 2024 funguje a 2025 ne, znamená to, že web WorldFootball.net ještě nevytvořil stránku pro novou sezónu.")
 else:
-    tab1, tab2 = st.tabs(["📊 Tabulka Ligy", "📅 Zápasy / Kolo"])
+    # Vypočítáme tabulku z odehraných zápasů
+    df_tabulka = vypocitej_tabulku(df_odehrane)
+    
+    # Převedeme tabulku na slovník pro rychlé vyhledávání síly
+    sila_db = df_tabulka.set_index("Tým")["Síla"].to_dict()
+    forma_db = df_tabulka.set_index("Tým")["Forma"].to_dict()
+
+    tab1, tab2 = st.tabs(["🔮 Predikce", "📊 Tabulka"])
     
     with tab1:
-        if df_tabulka is not None:
-            # Přejmenování sloupců pro hezčí vzhled (pokud existují)
-            rename_map = {
-                "Team": "Tým", "M.": "Z", "W": "V", "D": "R", "L": "P", 
-                "Goals": "Skóre", "Dif": "+/-", "Pt": "Body", "Pts": "Body"
-            }
-            df_tabulka = df_tabulka.rename(columns=rename_map)
-            st.dataframe(df_tabulka, hide_index=True, use_container_width=True)
+        if df_budouci is not None and not df_budouci.empty:
+            st.write(f"Nalezeno {len(df_budouci)} budoucích zápasů.")
+            
+            # Zobrazíme jen prvních 20 zápasů, ať to není dlouhé
+            for index, row in df_budouci.head(20).iterrows():
+                domaci = row["Home"]
+                hoste = row["Away"]
+                datum = row["Date"]
+                cas = row["Time"]
+                
+                # Získání síly
+                sila_d = sila_db.get(domaci, 0)
+                sila_h = sila_db.get(hoste, 0)
+                forma_d = forma_db.get(domaci, "")
+                forma_h = forma_db.get(hoste, "")
+                
+                # Vizualizace formy
+                def viz_forma(f): return f.replace("W", "🟢").replace("L", "🔴").replace("D", "⚪")
+                
+                with st.container():
+                    c1, c2, c3, c4, c5 = st.columns([1, 3, 2, 3, 1])
+                    
+                    if sila_d > 0 and sila_h > 0:
+                        # Predikce
+                        sila_d_total = sila_d + 10 # Domácí výhoda
+                        celkova = sila_d_total + sila_h
+                        proc_d = (sila_d_total / celkova) * 100
+                        proc_h = (sila_h / celkova) * 100
+                        
+                        with c2: 
+                            st.write(f"**{domaci}**")
+                            st.caption(viz_forma(forma_d))
+                        with c3:
+                            st.write(f"{datum} {cas}")
+                            st.markdown(f"#### {int(proc_d)}% : {int(proc_h)}%")
+                            if proc_d > 60: st.success(f"Tip: {domaci}")
+                            elif proc_h > 60: st.error(f"Tip: {hoste}")
+                            else: st.warning("Tip: Remíza")
+                        with c4:
+                            st.write(f"**{hoste}**")
+                            st.caption(viz_forma(forma_h))
+                    else:
+                        # Pokud nemáme data (např. tým teprve postoupil a nemá odehrané zápasy)
+                        with c3: st.write(f"{domaci} vs {hoste}")
+                    
+                    st.markdown("---")
         else:
-            st.warning("Tabulka ligy nebyla na stránce nalezena.")
+            st.info("Žádné budoucí zápasy nenalezeny.")
 
     with tab2:
-        if df_zapasy is not None:
-            st.write("Nalezený rozpis (zápasy):")
-            st.dataframe(df_zapasy, hide_index=True, use_container_width=True)
-        else:
-            st.info("Na stránce nebyly nalezeny žádné aktuální zápasy.")
+        st.dataframe(df_tabulka, use_container_width=True)
