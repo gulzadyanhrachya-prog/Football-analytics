@@ -4,7 +4,7 @@ import requests
 from datetime import datetime
 
 # --- KONFIGURACE ---
-API_KEY = st.secrets["FOOTBALL_API_KEY"]
+API_KEY = st.secrets["1718d4bf83e644c5983bd4d790e928a8"]
 BASE_URL = "https://api.football-data.org/v4"
 HEADERS = {'X-Auth-Token': API_KEY}
 
