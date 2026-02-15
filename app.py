@@ -14,8 +14,7 @@ def app_fotbal():
     st.header("⚽ Fotbalový Expert")
     st.caption("Data: Historie (Football-Data.co.uk) + Budoucnost (FixtureDownload.com)")
     
-    # --- KONFIGURACE ---
-    LIGY_KODY = {
+    # --- KONFIGURACE ---\n    LIGY_KODY = {
         "🇬🇧 Premier League": {"hist": "E0", "fut": "epl"},
         "🇬🇧 Championship": {"hist": "E1", "fut": "championship"},
         "🇩🇪 Bundesliga": {"hist": "D1", "fut": "bundesliga"},
@@ -41,27 +40,22 @@ def app_fotbal():
     def nacti_fotbal_data(liga_nazev, rok_start):
         kody = LIGY_KODY[liga_nazev]
         rok_konec = rok_start + 1
-        # Formát sezóny pro historii: "2425"
         sezona_short = f"{str(rok_start)[-2:]}{str(rok_konec)[-2:]}"
         
-        # Zde byla chyba - odstraněna zpětná lomítka
         url_hist = f"https://www.football-data.co.uk/mmz4281/{sezona_short}/{kody['hist']}.csv"
         url_fut = f"https://fixturedownload.com/download/{kody['fut']}-{rok_start}-UTC.csv"
         
-        # Stažení historie
         try:
             r_h = requests.get(url_hist)
             df_h = pd.read_csv(io.StringIO(r_h.text)) if r_h.status_code == 200 else None
         except: df_h = None
 
-        # Stažení budoucnosti
         try:
             r_f = requests.get(url_fut)
             if r_f.status_code == 200:
                 try: df_f = pd.read_csv(io.StringIO(r_f.text))
                 except: df_f = pd.read_csv(io.StringIO(r_f.content.decode('latin-1')))
             else: 
-                # Zkusíme alternativní název
                 url_fut_alt = f"https://fixturedownload.com/download/{kody['fut']}-{rok_start}-GMTStandardTime.csv"
                 r_f = requests.get(url_fut_alt)
                 df_f = pd.read_csv(io.StringIO(r_f.text)) if r_f.status_code == 200 else None
@@ -71,8 +65,7 @@ def app_fotbal():
 
     def analyzuj_silu(df_hist):
         if df_hist is None: return {}
-        tymy = {}
-        for index, row in df_hist.iterrows():
+        tymy = {}\n        for index, row in df_hist.iterrows():
             if pd.isna(row['FTR']): continue 
             domaci = normalizuj_nazev(row['HomeTeam'])
             hoste = normalizuj_nazev(row['AwayTeam'])
@@ -118,15 +111,12 @@ def app_fotbal():
     if df_hist is not None:
         db_sily = analyzuj_silu(df_hist)
         
-        # Zobrazení tabulky formy
         with st.expander("📊 Tabulka formy a bodů"):
             df_form = pd.DataFrame.from_dict(db_sily, orient='index').sort_values(by='body', ascending=False)
             st.dataframe(df_form)
 
         if df_fut is not None:
             st.subheader(f"📅 Rozpis zápasů: {vybrana_liga}")
-            
-            # Hledání sloupce s datem
             col_date = next((c for c in df_fut.columns if "Date" in c or "Time" in c), None)
             
             if col_date:
@@ -135,11 +125,10 @@ def app_fotbal():
                      df_fut['DateObj'] = pd.to_datetime(df_fut[col_date], errors='coerce')
                 
                 dnes = datetime.now()
-                # Zobrazíme zápasy od dneška dál (limit 15)
                 budouci = df_fut[df_fut['DateObj'] >= dnes].sort_values(by='DateObj').head(15)
                 
                 if budouci.empty:
-                    st.warning("Žádné budoucí zápasy v rozpisu (možná konec sezóny).")
+                    st.warning("Žádné budoucí zápasy v rozpisu.")
                 else:
                     for index, row in budouci.iterrows():
                         col_home = [c for c in df_fut.columns if "Home" in c][0]
@@ -151,7 +140,6 @@ def app_fotbal():
                         info_d = db_sily.get(normalizuj_nazev(domaci))
                         info_h = db_sily.get(normalizuj_nazev(hoste))
                         
-                        # Fallback vyhledávání
                         if not info_d:
                             for k in db_sily: 
                                 if normalizuj_nazev(domaci) in k: info_d = db_sily[k]; break
@@ -165,25 +153,25 @@ def app_fotbal():
                                 sila_d = info_d['sila'] + 10
                                 sila_h = info_h['sila']
                                 celk = sila_d + sila_h
-                                pd_val = (sila_d / celk) * 100
-                                ph_val = (sila_h / celk) * 100
+                                pd = (sila_d / celk) * 100
+                                ph = (sila_h / celk) * 100
                                 
                                 with c1: st.markdown(f"<div style='text-align:right'><b>{domaci}</b><br>{info_d['forma']}</div>", unsafe_allow_html=True)
                                 with c2: 
-                                    st.markdown(f"<div style='text-align:center'>{datum_str}<br><h4>{int(pd_val)}% : {int(ph_val)}%</h4></div>", unsafe_allow_html=True)
-                                    if pd_val > 60: st.success(f"Tip: {domaci}")
-                                    elif ph_val > 60: st.error(f"Tip: {hoste}")
+                                    st.markdown(f"<div style='text-align:center'>{datum_str}<br><h4>{int(pd)}% : {int(ph)}%</h4></div>", unsafe_allow_html=True)
+                                    if pd > 60: st.success(f"Tip: {domaci}")
+                                    elif ph > 60: st.error(f"Tip: {hoste}")
                                     else: st.warning("Remíza / Risk")
                                 with c3: st.markdown(f"<div style='text-align:left'><b>{hoste}</b><br>{info_h['forma']}</div>", unsafe_allow_html=True)
                             else:
                                 with c2: st.write(f"{domaci} vs {hoste}")
                             st.markdown("---")
     else:
-        st.error(f"Historická data pro sezónu {rok} nejsou dostupná. Zkus změnit rok.")
+        st.error(f"Historická data pro sezónu {rok} nejsou dostupná.")
 
 
 # ==========================================
-# 2. MODUL: TENIS (Scraping 2 dny)
+# 2. MODUL: TENIS (Robustní Scraping)
 # ==========================================
 
 def app_tenis():
@@ -192,40 +180,69 @@ def app_tenis():
 
     @st.cache_data(ttl=1800)
     def scrape_tennis_day(date_obj):
-        # Sestavení URL pro konkrétní den
         year = date_obj.year
         month = date_obj.month
         day = date_obj.day
         url = f"https://www.tennisexplorer.com/matches/?type=all&year={year}&month={month}&day={day}"
         
-        headers = {"User-Agent": "Mozilla/5.0"}
+        # Vylepšená hlavička
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        
         try:
             r = requests.get(url, headers=headers)
-            if r.status_code != 200: return []
+            if r.status_code != 200: return [], f"Chyba HTTP {r.status_code}"
             
-            dfs = pd.read_html(r.text)
-            # Hledáme největší tabulku
-            df = max(dfs, key=len)
+            # Použijeme lxml pro lepší parsování
+            try:
+                dfs = pd.read_html(r.text, flavor='lxml')
+            except:
+                dfs = pd.read_html(r.text) # Fallback
             
             matches = []
-            current_tournament = "Unknown"
+            current_tournament = "Neznámý turnaj"
             
-            for idx, row in df.iterrows():
-                col0 = str(row[0])
-                # Detekce turnaje (řádek bez času)
-                if ":" not in col0 and len(col0) > 3:
-                    current_tournament = col0
-                    continue
-                
-                # Detekce zápasu
-                if ":" in col0:
-                    try:
-                        # TennisExplorer formát: Time, Player, Score, Sets, Odds1, Odds2
-                        # Kurzy jsou obvykle na konci
-                        odds1 = float(row.iloc[-2])
-                        odds2 = float(row.iloc[-1])
+            # Hledáme správnou tabulku - ne podle velikosti, ale podle obsahu
+            target_df = None
+            for df in dfs:
+                # Tabulka s kurzy má obvykle hodně sloupců a obsahuje čas
+                if len(df.columns) > 4:
+                    # Převedeme na string pro kontrolu
+                    sample = str(df.head(5))
+                    if ":" in sample: # Čas
+                        target_df = df
+                        break
+            
+            if target_df is None:
+                return [], f"Nenalezena tabulka zápasů. (Nalezeno {len(dfs)} jiných tabulek)"
+
+            # Iterace přes řádky nalezené tabulky
+            for idx, row in target_df.iterrows():
+                try:
+                    col0 = str(row.iloc[0])
+                    
+                    # 1. Je to název turnaje? (Nemá čas a je dlouhý)
+                    if ":" not in col0 and len(col0) > 3:
+                        current_tournament = col0
+                        continue
+                    
+                    # 2. Je to zápas? (Má čas)
+                    if ":" in col0:
+                        # TennisExplorer: Time | Player | Score | Sets | Odds1 | Odds2
+                        # Kurzy jsou obvykle poslední dva sloupce
+                        odds1 = row.iloc[-2]
+                        odds2 = row.iloc[-1]
                         
-                        players = str(row[1])
+                        # Kontrola, zda jsou to čísla
+                        try:
+                            o1 = float(odds1)
+                            o2 = float(odds2)
+                        except:
+                            continue # Nejsou to kurzy (např. prázdné pole)
+                            
+                        players = str(row.iloc[1])
                         if " - " in players:
                             p1, p2 = players.split(" - ", 1)
                             
@@ -235,26 +252,32 @@ def app_tenis():
                                 "Turnaj": current_tournament,
                                 "Hráč 1": p1,
                                 "Hráč 2": p2,
-                                "Kurz 1": odds1,
-                                "Kurz 2": odds2
+                                "Kurz 1": o1,
+                                "Kurz 2": o2
                             })
-                    except:
-                        continue
-            return matches
-        except:
-            return []
+                except:
+                    continue
+                    
+            return matches, None
+        except Exception as e:
+            return [], str(e)
 
     # --- LOGIKA TENIS ---
     dnes = datetime.now()
     zitra = dnes + timedelta(days=1)
     
-    with st.spinner("Stahuji tenisové zápasy na 48 hodin..."):
-        zapasy_dnes = scrape_tennis_day(dnes)
-        zapasy_zitra = scrape_tennis_day(zitra)
+    with st.spinner("Stahuji tenisové zápasy (Dnešek + Zítřek)..."):
+        zapasy_dnes, err1 = scrape_tennis_day(dnes)
+        zapasy_zitra, err2 = scrape_tennis_day(zitra)
         vsechny_zapasy = zapasy_dnes + zapasy_zitra
 
+    # Diagnostika, pokud se nic nenašlo
     if not vsechny_zapasy:
-        st.error("Nepodařilo se stáhnout žádné tenisové zápasy s kurzy.")
+        st.error("Nepodařilo se stáhnout žádné zápasy.")
+        with st.expander("🔍 Zobrazit detaily chyby"):
+            st.write(f"Dnešek: {err1}")
+            st.write(f"Zítřek: {err2}")
+            st.write("Tip: Ujisti se, že jsi přidal 'lxml' do requirements.txt")
     else:
         # Filtr turnajů
         turnaje = sorted(list(set([z["Turnaj"] for z in vsechny_zapasy])))
@@ -263,20 +286,22 @@ def app_tenis():
         with col_f1:
             filtr_turnaj = st.selectbox("Filtrovat Turnaj:", ["Vše"] + turnaje)
         with col_f2:
-            jen_atp = st.checkbox("Ukázat jen ATP/WTA (skrýt malé turnaje)", value=True)
+            jen_atp = st.checkbox("Ukázat jen ATP/WTA", value=True)
 
         st.subheader(f"Nalezeno {len(vsechny_zapasy)} zápasů")
         
+        count = 0
         for z in vsechny_zapasy:
             # Filtrování
             if jen_atp and ("ATP" not in z["Turnaj"] and "WTA" not in z["Turnaj"]): continue
             if filtr_turnaj != "Vše" and z["Turnaj"] != filtr_turnaj: continue
             
-            # Výpočet predikce z kurzů
-            # Implied Probability = 1 / Decimal Odds
+            count += 1
+            
+            # Výpočet predikce
             prob1 = (1 / z["Kurz 1"])
             prob2 = (1 / z["Kurz 2"])
-            margin = prob1 + prob2 # Sázkovky mají marži nad 100%
+            margin = prob1 + prob2 
             
             real_prob1 = (prob1 / margin) * 100
             real_prob2 = (prob2 / margin) * 100
@@ -286,9 +311,9 @@ def app_tenis():
                 
                 with c1: 
                     st.caption(f"{z['Datum']} {z['Čas']}")
-                    st.caption(z["Turnaj"][:20] + "...")
+                    st.caption(z["Turnaj"][:25])
                 
-                with c2:
+                with c2: 
                     st.write(f"**{z['Hráč 1']}**")
                     st.write(f"Kurz: {z['Kurz 1']}")
                 
@@ -303,6 +328,9 @@ def app_tenis():
                     st.write(f"Kurz: {z['Kurz 2']}")
                 
                 st.markdown("---")
+        
+        if count == 0:
+            st.info("Žádné zápasy neodpovídají filtru.")
 
 # ==========================================
 # HLAVNÍ ROZCESTNÍK
