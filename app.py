@@ -6,7 +6,10 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Sport Betting Hub", layout="wide")
 
-# ==========================================\n# 1. MODUL: FOTBAL (Hybrid CSV)\n# ==========================================\n
+# ==========================================
+# 1. MODUL: FOTBAL (Hybrid CSV)
+# ==========================================
+
 def app_fotbal():
     st.header("⚽ Fotbalový Expert")
     st.caption("Data: Historie (Football-Data.co.uk) + Budoucnost (FixtureDownload.com)")
@@ -41,8 +44,9 @@ def app_fotbal():
         # Formát sezóny pro historii: "2425"
         sezona_short = f"{str(rok_start)[-2:]}{str(rok_konec)[-2:]}"
         
-        url_hist = f"https://www.football-data.co.uk/mmz4281/{sezona_short}/{kody[\'hist\']}.csv"
-        url_fut = f"https://fixturedownload.com/download/{kody[\'fut\']}-{rok_start}-UTC.csv"
+        # Zde byla chyba - odstraněna zpětná lomítka
+        url_hist = f"https://www.football-data.co.uk/mmz4281/{sezona_short}/{kody['hist']}.csv"
+        url_fut = f"https://fixturedownload.com/download/{kody['fut']}-{rok_start}-UTC.csv"
         
         # Stažení historie
         try:
@@ -161,14 +165,14 @@ def app_fotbal():
                                 sila_d = info_d['sila'] + 10
                                 sila_h = info_h['sila']
                                 celk = sila_d + sila_h
-                                pd = (sila_d / celk) * 100
-                                ph = (sila_h / celk) * 100
+                                pd_val = (sila_d / celk) * 100
+                                ph_val = (sila_h / celk) * 100
                                 
                                 with c1: st.markdown(f"<div style='text-align:right'><b>{domaci}</b><br>{info_d['forma']}</div>", unsafe_allow_html=True)
                                 with c2: 
-                                    st.markdown(f"<div style='text-align:center'>{datum_str}<br><h4>{int(pd)}% : {int(ph)}%</h4></div>", unsafe_allow_html=True)
-                                    if pd > 60: st.success(f"Tip: {domaci}")
-                                    elif ph > 60: st.error(f"Tip: {hoste}")
+                                    st.markdown(f"<div style='text-align:center'>{datum_str}<br><h4>{int(pd_val)}% : {int(ph_val)}%</h4></div>", unsafe_allow_html=True)
+                                    if pd_val > 60: st.success(f"Tip: {domaci}")
+                                    elif ph_val > 60: st.error(f"Tip: {hoste}")
                                     else: st.warning("Remíza / Risk")
                                 with c3: st.markdown(f"<div style='text-align:left'><b>{hoste}</b><br>{info_h['forma']}</div>", unsafe_allow_html=True)
                             else:
@@ -178,7 +182,10 @@ def app_fotbal():
         st.error(f"Historická data pro sezónu {rok} nejsou dostupná. Zkus změnit rok.")
 
 
-# ==========================================\n# 2. MODUL: TENIS (Scraping 2 dny)\n# ==========================================\n
+# ==========================================
+# 2. MODUL: TENIS (Scraping 2 dny)
+# ==========================================
+
 def app_tenis():
     st.header("🎾 Tenisový Prediktor")
     st.caption("Zdroj: TennisExplorer.com (Dnešek + Zítřek)")
@@ -251,8 +258,6 @@ def app_tenis():
     else:
         # Filtr turnajů
         turnaje = sorted(list(set([z["Turnaj"] for z in vsechny_zapasy])))
-        # Předvybereme "ATP" turnaje pokud tam jsou, jinak Vše
-        atp_turnaje = [t for t in turnaje if "ATP" in t]
         
         col_f1, col_f2 = st.columns(2)
         with col_f1:
@@ -299,7 +304,10 @@ def app_tenis():
                 
                 st.markdown("---")
 
-# ==========================================\n# HLAVNÍ ROZCESTNÍK\n# ==========================================\n
+# ==========================================
+# HLAVNÍ ROZCESTNÍK
+# ==========================================
+
 st.sidebar.title("🏆 Sportovní Centrum")
 sport = st.sidebar.radio("Vyber sport:", ["⚽ Fotbal", "🎾 Tenis"])
 
