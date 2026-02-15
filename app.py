@@ -3,170 +3,190 @@ import pandas as pd
 import requests
 from datetime import datetime
 
-# --- KONFIGURACE ---
-if "FOOTBALL_API_KEY" in st.secrets:
-    API_KEY = st.secrets["FOOTBALL_API_KEY"]
+# --- KONFIGURACE ---\n# Změna: Hledáme nový klíč APISPORTS_KEY
+if "APISPORTS_KEY" in st.secrets:
+    API_KEY = st.secrets["APISPORTS_KEY"]
 else:
-    st.error("Chybí API klíč v Secrets! Nastav ho v .streamlit/secrets.toml nebo na Streamlit Cloud.")
+    st.error("Chybí APISPORTS_KEY v Secrets!")
     st.stop()
 
-BASE_URL = "https://api.football-data.org/v4"
-HEADERS = {'X-Auth-Token': API_KEY}
+# --- ZMĚNA ADRESY PRO PŘÍMÝ PŘÍSTUP ---
+URL_BASE = "https://v3.football.api-sports.io"
 
-st.set_page_config(page_title="Betting Pro", layout="wide")
-
-# --- DEFINICE LIG (Kódování API) ---
-# Toto jsou ligy dostupné ve Free Tieru
-LIGY = {
-    "🇬🇧 Premier League (Anglie 1)": "PL",
-    "🇬🇧 Championship (Anglie 2)": "ELC",
-    "🇩🇪 Bundesliga (Německo 1)": "BL1",
-    "🇪🇸 La Liga (Španělsko 1)": "PD",
-    "🇮🇹 Serie A (Itálie 1)": "SA",
-    "🇫🇷 Ligue 1 (Francie 1)": "FL1",
-    "🇳🇱 Eredivisie (Holandsko 1)": "DED",
-    "🇵🇹 Primeira Liga (Portugalsko 1)": "PPL",
-    "🇪🇺 Liga Mistrů (Champions League)": "CL"
+# --- ZMĚNA HLAVIČKY ---
+HEADERS = {
+    'x-apisports-key': API_KEY
 }
 
-# --- SIDEBAR (VÝBĚR LIGY) ---
-st.sidebar.title("Nastavení")
-vybrana_liga_nazev = st.sidebar.selectbox("Vyber soutěž:", list(LIGY.keys()))
-KOD_LIGY = LIGY[vybrana_liga_nazev]
+# Aktuální sezóna
+SEZONA = 2023 
 
-st.sidebar.info(f"Právě analyzuji: {vybrana_liga_nazev}")
-st.sidebar.markdown("---")
-st.sidebar.write("Poznámka: Free verze API má omezený počet volání za minutu. Pokud data nenaskočí, chvíli počkej.")
+st.set_page_config(page_title="Betting Master", layout="wide")
+
+# --- DEFINICE LIG ---
+# Zde jsou ID lig. Můžeš si přidat další podle dokumentace API-Football.
+LIGY = {
+    "🇨🇿 Fortuna Liga (Česko 1)": 345,
+    "🇬🇧 Premier League (Anglie 1)": 39,
+    "🇬🇧 Championship (Anglie 2)": 40,
+    "🇩🇪 Bundesliga (Německo 1)": 78,
+    "🇩🇪 2. Bundesliga (Německo 2)": 79,
+    "🇪🇸 La Liga (Španělsko 1)": 140,
+    "🇪🇸 La Liga 2 (Španělsko 2)": 141,
+    "🇮🇹 Serie A (Itálie 1)": 135,
+    "🇮🇹 Serie B (Itálie 2)": 136,
+    "🇫🇷 Ligue 1 (Francie 1)": 61,
+    "🇫🇷 Ligue 2 (Francie 2)": 62,
+    "🇳🇱 Eredivisie (Holandsko 1)": 88,
+    "🇵🇱 Ekstraklasa (Polsko 1)": 106,
+    "🇪🇺 Liga Mistrů": 2
+}
+
+# --- SIDEBAR ---
+st.sidebar.title("Výběr Soutěže")
+vybrana_liga_nazev = st.sidebar.selectbox("Liga:", list(LIGY.keys()))
+LIGA_ID = LIGY[vybrana_liga_nazev]
+
+st.sidebar.info(f"Limit API: 100 požadavků/den. Data se ukládají do paměti na 1 hodinu.")
 
 # --- FUNKCE ---
 
-@st.cache_data(ttl=600)
-def nacti_data_ligy(kod_ligy):
-    # Stáhneme tabulku pro VYBRANOU ligu
-    url = f"{BASE_URL}/competitions/{kod_ligy}/standings"
-    response = requests.get(url, headers=HEADERS)
+@st.cache_data(ttl=3600)
+def nacti_tabulku(liga_id):
+    url = f"{URL_BASE}/standings"
+    querystring = {"season": str(SEZONA), "league": str(liga_id)}
     
-    if response.status_code != 200:
-        return None
-
-    data = response.json()
-    # Některé ligy (třeba Liga mistrů) mají jinou strukturu, zkusíme najít tabulku 'TOTAL'
     try:
-        tabulka = data['standings'][0]['table']
-    except (KeyError, IndexError):
-        return None
-    
-    tymy_info = {}
-    for radek in tabulka:
-        tym = radek['team']['name']
-        logo = radek['team']['crest']
-        body = radek['points']
+        response = requests.get(url, headers=HEADERS, params=querystring)
         
-        raw_form = radek.get('form')
-        if raw_form is None:
-            forma = ""
-        else:
-            forma = raw_form
+        # Diagnostika pro případ chyby
+        if response.status_code != 200:
+            st.error(f"Chyba API: {response.status_code}")
+            return None
+            
+        data = response.json()
         
-        bonus = forma.count("W") * 3 
-        sila = body + bonus
-        
-        tymy_info[tym] = {
-            "sila": sila,
-            "logo": logo,
-            "forma": forma
-        }
-        
-    return tymy_info
+        # Kontrola, zda API vrátilo data (občas vrátí prázdný seznam, pokud nemáš práva)
+        if not data['response']:
+            return None
 
-def nacti_zapasy(kod_ligy):
-    # Stáhneme zápasy pro VYBRANOU ligu
-    url = f"{BASE_URL}/competitions/{kod_ligy}/matches?status=SCHEDULED"
-    response = requests.get(url, headers=HEADERS)
-    if response.status_code != 200:
+        standings = data['response'][0]['league']['standings'][0]
+        
+        tymy_info = {}\n        for radek in standings:
+            tym_nazev = radek['team']['name']
+            tym_id = radek['team']['id']
+            logo = radek['team']['logo']
+            body = radek['points']
+            forma = radek['form'] 
+            
+            if forma:
+                bonus = forma.count("W") * 3 + forma.count("D") * 1
+            else:
+                bonus = 0
+                forma = "?"
+            
+            sila = body + bonus
+            
+            tymy_info[tym_nazev] = {
+                "id": tym_id,
+                "sila": sila,
+                "logo": logo,
+                "forma": forma,
+                "pozice": radek['rank']
+            }
+        return tymy_info
+        
+    except Exception as e:
+        return None
+
+@st.cache_data(ttl=3600)
+def nacti_zapasy(liga_id):
+    url = f"{URL_BASE}/fixtures"
+    querystring = {"season": str(SEZONA), "league": str(liga_id), "next": "10"}
+    
+    try:
+        response = requests.get(url, headers=HEADERS, params=querystring)
+        data = response.json()
+        return data['response']
+    except:
         return []
-    return response.json()['matches']
 
 # --- UI APLIKACE ---
 
 st.title(f"⚽ {vybrana_liga_nazev}")
 st.markdown("---")
 
-# 1. Načtení dat
-with st.spinner(f'Stahuji data pro {vybrana_liga_nazev}...'):
-    tymy_db = nacti_data_ligy(KOD_LIGY)
+# 1. Načtení dat o týmech
+with st.spinner("Stahuji tabulku a statistiky..."):
+    tymy_db = nacti_tabulku(LIGA_ID)
 
 if not tymy_db:
-    st.warning(f"Pro soutěž {vybrana_liga_nazev} se nepodařilo načíst tabulku. (Možná právě neprobíhá nebo má jiný formát).")
+    st.warning("Nepodařilo se načíst tabulku. Možné příčiny:")
+    st.write("1. Pro tuto ligu ještě nezačala sezóna 2023.")
+    st.write("2. Došel denní limit (100 volání).")
+    st.write("3. Chyba v API klíči.")
     st.stop()
 
 # 2. Načtení zápasů
-zapasy = nacti_zapasy(KOD_LIGY)
+zapasy = nacti_zapasy(LIGA_ID)
 
 if not zapasy:
-    st.info("Žádné naplánované zápasy v dohledu pro tuto ligu.")
+    st.info("Žádné naplánované zápasy v nejbližší době.")
 else:
-    st.subheader(f"📅 Nadcházející zápasy ({len(zapasy)})")
+    st.subheader("📅 Predikce na nadcházející zápasy")
     
-    # Limit na 15 zápasů, ať se to nenačítá věčnost
-    for zapas in zapasy[:15]: 
-        domaci = zapas['homeTeam']['name']
-        hoste = zapas['awayTeam']['name']
-        datum = zapas['utcDate'][:10]
+    for zapas in zapasy:
+        domaci_nazev = zapas['teams']['home']['name']
+        hoste_nazev = zapas['teams']['away']['name']
+        datum_raw = zapas['fixture']['date']
+        datum = datetime.fromisoformat(datum_raw.replace("Z", "+00:00")).strftime("%d.%m. %H:%M")
         
-        info_domaci = tymy_db.get(domaci)
-        info_hoste = tymy_db.get(hoste)
+        logo_domaci = zapas['teams']['home']['logo']
+        logo_hoste = zapas['teams']['away']['logo']
+
+        info_domaci = tymy_db.get(domaci_nazev)
+        info_hoste = tymy_db.get(hoste_nazev)
         
         if info_domaci and info_hoste:
-            # --- MATEMATIKA SÁZENÍ ---
-            sila_d = info_domaci['sila'] + 10 
+            sila_d = info_domaci['sila'] + 15 
             sila_h = info_hoste['sila']
             
-            celkova_sila = sila_d + sila_h
+            celkova = sila_d + sila_h
+            if celkova == 0: celkova = 1
             
-            if celkova_sila == 0:
-                sance_domaci = 50
-                sance_hoste = 50
-            else:
-                sance_domaci = (sila_d / celkova_sila) * 100
-                sance_hoste = (sila_h / celkova_sila) * 100
+            proc_d = (sila_d / celkova) * 100
+            proc_h = (sila_h / celkova) * 100
             
             try:
-                kurz_domaci = 100 / sance_domaci
-                kurz_hoste = 100 / sance_hoste
-            except ZeroDivisionError:
-                kurz_domaci = 0
-                kurz_hoste = 0
-            
-            # --- VIZUALIZACE ---
-            with st.container():
-                col1, col2, col3, col4, col5 = st.columns([1, 3, 2, 3, 1])
-                
-                with col2:
-                    st.image(info_domaci['logo'], width=50)
-                    st.write(f"**{domaci}**")
-                    st.caption(f"Forma: {info_domaci['forma']}")
-                
-                with col3:
-                    st.write(f"*{datum}*")
-                    st.markdown(f"### {int(sance_domaci)}% vs {int(sance_hoste)}%")
-                    
-                    if sance_domaci > 60:
-                        st.success(f"Tip: {domaci}")
-                    elif sance_hoste > 60:
-                        st.error(f"Tip: {hoste}")
-                    else:
-                        st.warning("Tip: Remíza/Risk")
+                kurz_d = 100 / proc_d
+                kurz_h = 100 / proc_h
+            except:
+                kurz_d = 0
+                kurz_h = 0
 
-                with col4:
-                    st.image(info_hoste['logo'], width=50)
-                    st.write(f"**{hoste}**")
-                    st.caption(f"Forma: {info_hoste['forma']}")
+            with st.container():
+                c1, c2, c3, c4, c5 = st.columns([1, 3, 2, 3, 1])
                 
-                with st.expander(f"📊 Analýza a Kurzy: {domaci} vs {hoste}"):
-                    c1, c2 = st.columns(2)
-                    c1.metric("Férový Kurz (Domácí)", f"{kurz_domaci:.2f}")
-                    c2.metric("Férový Kurz (Hosté)", f"{kurz_hoste:.2f}")
-                    st.info("Porovnej s kurzy sázkové kanceláře.")
+                with c2:
+                    st.image(logo_domaci, width=40)
+                    st.write(f"**{domaci_nazev}**")
+                    st.caption(f"#{info_domaci['pozice']} | {info_domaci['forma']}")
+                
+                with c3:
+                    st.write(f"*{datum}*")
+                    st.markdown(f"#### {int(proc_d)}% : {int(proc_h)}%")
+                    if proc_d > 55: st.success(f"Tip: {domaci_nazev}")
+                    elif proc_h > 55: st.error(f"Tip: {hoste_nazev}")
+                    else: st.warning("Vyrovnané")
+                
+                with c4:
+                    st.image(logo_hoste, width=40)
+                    st.write(f"**{hoste_nazev}**")
+                    st.caption(f"#{info_hoste['pozice']} | {info_hoste['forma']}")
+                
+                with st.expander("📊 Detailní kurzy"):
+                    k1, k2 = st.columns(2)
+                    k1.metric("Férový kurz Domácí", f"{kurz_d:.2f}")
+                    k2.metric("Férový kurz Hosté", f"{kurz_h:.2f}")
                 
                 st.markdown("---")
