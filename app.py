@@ -5,7 +5,7 @@ from datetime import datetime
 
 # --- KONFIGURACE ---
 try:
-    API_KEY = st.secrets["1718d4bf83e644c5983bd4d790e928a8"]
+    API_KEY = st.secrets["FOOTBALL_API_KEY"]
 except FileNotFoundError:
     st.error("Chybí API klíč v Secrets!")
     st.stop()
