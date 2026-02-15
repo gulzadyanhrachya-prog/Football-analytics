@@ -4,7 +4,6 @@ import requests
 from datetime import datetime
 
 # --- KONFIGURACE ---
-# Získání klíče z trezoru
 try:
     API_KEY = st.secrets["FOOTBALL_API_KEY"]
 except FileNotFoundError:
@@ -14,139 +13,126 @@ except FileNotFoundError:
 BASE_URL = "https://api.football-data.org/v4"
 HEADERS = {'X-Auth-Token': API_KEY}
 
-st.set_page_config(page_title="Betting Advisor", layout="wide")
-st.title("⚽ Premier League: Predikce Zápasů")
+st.set_page_config(page_title="Betting Pro", layout="wide")
 
-# --- FUNKCE 1: Tabulka a síla týmů ---
+# --- FUNKCE ---
+
 @st.cache_data(ttl=600)
-def nacti_silu_tymu():
+def nacti_data_ligy():
+    # Stáhneme tabulku včetně log týmů
     url = f"{BASE_URL}/competitions/PL/standings"
     response = requests.get(url, headers=HEADERS)
     
     if response.status_code != 200:
-        st.error(f"Chyba při stahování tabulky: {response.status_code}")
         return None
 
     data = response.json()
     tabulka = data['standings'][0]['table']
     
-    sila_tymu = {}
+    # Uložíme si data o týmech do slovníku pro rychlé vyhledávání
+    # Klíč = Název týmu, Hodnota = {Síla, Logo URL}
+    tymy_info = {}
     for radek in tabulka:
         tym = radek['team']['name']
+        logo = radek['team']['crest']
         body = radek['points']
-        # Ošetření chyby: Pokud API nepošle formu, použijeme prázdný řetězec
-        forma = radek.get('form', "") 
+        forma = radek.get('form', "")
         
-        # Výpočet síly: Body + (Výhry v posledních 5 zápasech * 2)
-        if forma:
-            bonus_formy = forma.count("W") * 2
-        else:
-            bonus_formy = 0
-            
-        sila_tymu[tym] = body + bonus_formy
+        # Výpočet síly (Body + Bonus za formu)
+        bonus = forma.count("W") * 3 # Zvýšili jsme váhu formy na 3 body
+        sila = body + bonus
         
-    return sila_tymu
+        tymy_info[tym] = {
+            "sila": sila,
+            "logo": logo,
+            "forma": forma
+        }
+        
+    return tymy_info
 
-# --- FUNKCE 2: Nadcházející zápasy ---
-def nacti_nadchazejici_zapasy():
-    # Stáhneme zápasy na příštích 10 dní
-    # API filtr: dateFrom (dnes) a dateTo (za 10 dní)
-    dnes = datetime.now().strftime('%Y-%m-%d')
-    # Jednoduchý trik: stáhneme prostě "SCHEDULED" (naplánované)
+def nacti_zapasy():
     url = f"{BASE_URL}/competitions/PL/matches?status=SCHEDULED"
-    
     response = requests.get(url, headers=HEADERS)
-    
     if response.status_code != 200:
-        st.warning(f"Nepodařilo se stáhnout rozpis zápasů (Kód {response.status_code}).")
         return []
-        
-    data = response.json()
-    return data['matches']
+    return response.json()['matches']
 
-# --- HLAVNÍ LOGIKA APLIKACE ---
+# --- UI APLIKACE ---
 
-# 1. Načtení síly týmů
-with st.spinner('Analyzuji sílu týmů z tabulky...'):
-    sila_tymu = nacti_silu_tymu()
+st.title("⚽ Premier League: Smart Betting")
+st.markdown("---")
 
-if not sila_tymu:
-    st.error("Aplikace nemůže pokračovat bez dat z tabulky.")
+# 1. Načtení dat
+with st.spinner('Stahuji data a loga týmů...'):
+    tymy_db = nacti_data_ligy()
+
+if not tymy_db:
+    st.error("Chyba při stahování dat.")
     st.stop()
 
-st.success(f"✅ Úspěšně analyzováno {len(sila_tymu)} týmů.")
-
 # 2. Načtení zápasů
-with st.spinner('Hledám nadcházející zápasy...'):
-    zapasy = nacti_nadchazejici_zapasy()
+zapasy = nacti_zapasy()
 
-# 3. Výpočet predikcí
-if len(zapasy) == 0:
-    st.info("Momentálně nejsou naplánované žádné zápasy v blízké době (nebo API limituje výhled).")
+if not zapasy:
+    st.info("Žádné naplánované zápasy v dohledu.")
 else:
-    st.subheader(f"🔮 Predikce na nejbližší zápasy")
+    st.subheader(f"📅 Nadcházející příležitosti ({len(zapasy)})")
     
-    predikce_list = []
-    
-    # Zpracujeme jen prvních 10 nalezených zápasů
-    for zapas in zapasy[:10]:
+    # Projdeme zápasy a pro každý vytvoříme hezkou kartu
+    for zapas in zapasy[:10]: # Limit na 10 zápasů
         domaci = zapas['homeTeam']['name']
         hoste = zapas['awayTeam']['name']
-        datum_raw = zapas['utcDate']
-        datum = datum_raw[:10] # Jen datum bez času
+        datum = zapas['utcDate'][:10]
         
-        # Získáme sílu (pokud tým neznáme, dáme 0)
-        sila_domaci = sila_tymu.get(domaci, 0)
-        sila_hoste = sila_tymu.get(hoste, 0)
+        # Získáme info z naší databáze
+        info_domaci = tymy_db.get(domaci)
+        info_hoste = tymy_db.get(hoste)
         
-        # Pokud nemáme data o síle (třeba tým postoupil a není v naší tabulce), přeskočíme
-        if sila_domaci == 0 or sila_hoste == 0:
-            continue
-
-        # ALGORITMUS
-        skore_domaci = sila_domaci + 5 # Výhoda domácích
-        skore_hoste = sila_hoste
-        
-        rozdil = skore_domaci - skore_hoste
-        sance_procenta = 50 + (rozdil / 2) # Hrubý odhad procent
-        
-        # Omezení procent na 5-95%
-        sance_procenta = max(5, min(95, sance_procenta))
-
-        if rozdil > 8:
-            tip = f"Výhra {domaci}"
-            duvera = "Vysoká"
-        elif rozdil < -8:
-            tip = f"Výhra {hoste}"
-            duvera = "Vysoká"
-        else:
-            tip = "Remíza / Vyrovnané"
-            duvera = "Nízká"
+        if info_domaci and info_hoste:
+            # --- MATEMATIKA SÁZENÍ ---
+            sila_d = info_domaci['sila'] + 10 # Domácí výhoda (zvýšena)
+            sila_h = info_hoste['sila']
             
-        predikce_list.append({
-            "Datum": datum,
-            "Domácí": domaci,
-            "Hosté": hoste,
-            "Náš Tip": tip,
-            "Důvěra": duvera,
-            "Síla D": sila_domaci,
-            "Síla H": sila_hoste
-        })
-    
-    if predikce_list:
-        df_predikce = pd.DataFrame(predikce_list)
-        # Zobrazíme tabulku bez indexu (číslování řádků)
-        st.dataframe(df_predikce, hide_index=True)
-        
-        # Detailní rozbor prvního zápasu
-        top_zapas = predikce_list[0]
-        st.markdown("---")
-        st.subheader(f"Detail: {top_zapas['Domácí']} vs {top_zapas['Hosté']}")
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Síla Domácí", top_zapas['Síla D'])
-        col2.metric("Síla Hosté", top_zapas['Síla H'])
-        col3.metric("Náš Tip", top_zapas['Náš Tip'])
-        
-    else:
-        st.warning("Našla se data o zápasech, ale nepodařilo se je spárovat s tabulkou.")
+            celkova_sila = sila_d + sila_h
+            sance_domaci = (sila_d / celkova_sila) * 100
+            sance_hoste = (sila_h / celkova_sila) * 100
+            
+            # Výpočet férového kurzu (1 / pravděpodobnost)
+            # Příklad: 50% šance = kurz 2.00
+            kurz_domaci = 100 / sance_domaci
+            kurz_hoste = 100 / sance_hoste
+            
+            # --- VIZUALIZACE KARTY ZÁPASU ---
+            with st.container():
+                col1, col2, col3, col4, col5 = st.columns([1, 3, 2, 3, 1])
+                
+                with col2:
+                    st.image(info_domaci['logo'], width=50)
+                    st.write(f"**{domaci}**")
+                    st.caption(f"Forma: {info_domaci['forma']}")
+                
+                with col3:
+                    st.write(f"*{datum}*")
+                    st.markdown(f"### {int(sance_domaci)}% vs {int(sance_hoste)}%")
+                    
+                    # Zvýraznění favorita
+                    if sance_domaci > 60:
+                        st.success(f"Tip: {domaci}")
+                    elif sance_hoste > 60:
+                        st.error(f"Tip: {hoste}")
+                    else:
+                        st.warning("Tip: Remíza/Risk")
+
+                with col4:
+                    st.image(info_hoste['logo'], width=50)
+                    st.write(f"**{hoste}**")
+                    st.caption(f"Forma: {info_hoste['forma']}")
+                
+                # Detailní data pod kartou
+                with st.expander(f"📊 Analýza a Kurzy pro: {domaci} vs {hoste}"):
+                    c1, c2 = st.columns(2)
+                    c1.metric("Náš Férový Kurz (Domácí)", f"{kurz_domaci:.2f}")
+                    c2.metric("Náš Férový Kurz (Hosté)", f"{kurz_hoste:.2f}")
+                    st.info("Pokud sázková kancelář nabízí vyšší kurz než je náš 'Férový', jde o výhodnou sázku (Value Bet).")
+                
+                st.markdown("---")
