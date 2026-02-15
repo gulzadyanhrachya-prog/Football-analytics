@@ -6,22 +6,34 @@ from datetime import datetime, timedelta
 import requests
 import io
 
-st.set_page_config(page_title="Betting Auto-Pilot v12.1", layout="wide")
+st.set_page_config(page_title="Betting Auto-Pilot v13", layout="wide")
 
-# --- 1. ZÍSKÁNÍ DAT (ClubElo Fixtures) ---
+# --- 1. ZÍSKÁNÍ DAT (Dvojitý zdroj) ---
 @st.cache_data(ttl=3600)
-def get_fixtures():
-    url = "http://api.clubelo.com/Fixtures"
+def get_data():
+    # A) Rozpis zápasů
+    url_fixtures = "http://api.clubelo.com/Fixtures"
+    # B) Databáze síly týmů (pro případ, že v rozpisu chybí)
+    url_ratings = "http://api.clubelo.com/" + datetime.now().strftime("%Y-%m-%d")
+    
+    df_fix = None
+    df_elo = None
+    
     try:
-        s = requests.get(url).content
-        df = pd.read_csv(io.StringIO(s.decode('utf-8')))
-        return df
-    except:
-        return None
+        s_fix = requests.get(url_fixtures).content
+        df_fix = pd.read_csv(io.StringIO(s_fix.decode('utf-8')))
+    except: pass
+    
+    try:
+        s_elo = requests.get(url_ratings).content
+        df_elo = pd.read_csv(io.StringIO(s_elo.decode('utf-8')))
+    except: pass
+    
+    return df_fix, df_elo
 
 # --- 2. MATEMATICKÉ MODELY ---
 def calculate_probs(elo_h, elo_a):
-    # 1. Výhra (Elo)
+    # Výhra (Elo)
     elo_diff = elo_h - elo_a + 100 # Domácí výhoda
     prob_h_win = 1 / (10**(-elo_diff/400) + 1)
     prob_a_win = 1 - prob_h_win
@@ -33,7 +45,7 @@ def calculate_probs(elo_h, elo_a):
     real_h = prob_h_win * (1 - prob_draw)
     real_a = prob_a_win * (1 - prob_draw)
     
-    # 2. Góly (Poisson)
+    # Góly (Poisson)
     exp_xg_h = max(0.5, 1.45 + (elo_diff / 500))
     exp_xg_a = max(0.5, 1.15 - (elo_diff / 500))
     
@@ -59,7 +71,7 @@ def calculate_probs(elo_h, elo_a):
         "BTTS Yes": prob_btts, "BTTS No": 1 - prob_btts
     }
 
-# --- 3. LOGIKA VÝBĚRU NEJLEPŠÍ SÁZKY ---
+# --- 3. VÝBĚR SÁZKY ---
 def pick_best_bet(probs):
     candidates = []
     candidates.append(("Výhra Domácích (1)", probs["1"]))
@@ -81,18 +93,15 @@ def pick_best_bet(probs):
     return best_bet[0], best_bet[1]
 
 # --- UI APLIKACE ---
-st.title("🤖 Betting Auto-Pilot")
+st.title("🤖 Betting Auto-Pilot (Robust Mode)")
 
-with st.spinner("Skenuji evropské trávníky a počítám predikce..."):
-    df = get_fixtures()
+with st.spinner("Skenuji data a propojuji databáze..."):
+    df_fix, df_elo = get_data()
 
-if df is not None:
-    # Diagnostika sloupců (pro jistotu)
-    # st.write(df.columns.tolist()) 
-    
+if df_fix is not None:
     # Zpracování data
     try:
-        df['DateObj'] = pd.to_datetime(df['Date'])
+        df_fix['DateObj'] = pd.to_datetime(df_fix['Date'])
     except:
         st.error("Chyba formátu data v souboru ClubElo.")
         st.stop()
@@ -100,12 +109,19 @@ if df is not None:
     dnes = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     limit = dnes + timedelta(days=4) 
     
-    mask = (df['DateObj'] >= dnes) & (df['DateObj'] <= limit)
-    upcoming = df[mask].copy()
+    mask = (df_fix['DateObj'] >= dnes) & (df_fix['DateObj'] <= limit)
+    upcoming = df_fix[mask].copy()
     
     if upcoming.empty:
         st.warning("V nejbližších dnech nejsou v databázi žádné zápasy.")
+        st.write("Diagnostika: Zobrazuji prvních 5 řádků ze souboru (pro kontrolu data):")
+        st.dataframe(df_fix.head())
     else:
+        # Vytvoříme slovník pro rychlé vyhledávání Elo (pokud máme df_elo)
+        elo_dict = {}
+        if df_elo is not None:
+            elo_dict = df_elo.set_index('Club')['Elo'].to_dict()
+
         results = []
         progress_bar = st.progress(0)
         total_rows = len(upcoming)
@@ -114,12 +130,28 @@ if df is not None:
             if i % 10 == 0: progress_bar.progress(min(i / total_rows, 1.0))
             
             try:
-                # Zde může nastat chyba, pokud chybí sloupec
-                elo_h = row.get('EloHome')
-                elo_a = row.get('EloAway')
+                home = row['Home']
+                away = row['Away']
                 
-                # Pokud Elo chybí, přeskočíme
-                if pd.isna(elo_h) or pd.isna(elo_a): continue
+                # Získání Elo - ZKUSÍME VÍCE ZPŮSOBŮ
+                elo_h = None
+                elo_a = None
+                
+                # 1. Zkusíme přímo z rozpisu (pokud tam sloupec je)
+                if 'EloHome' in row and not pd.isna(row['EloHome']):
+                    elo_h = row['EloHome']
+                if 'EloAway' in row and not pd.isna(row['EloAway']):
+                    elo_a = row['EloAway']
+                    
+                # 2. Pokud chybí, zkusíme hlavní databázi
+                if elo_h is None and home in elo_dict:
+                    elo_h = elo_dict[home]
+                if elo_a is None and away in elo_dict:
+                    elo_a = elo_dict[away]
+                
+                # Pokud stále nemáme Elo, nemůžeme počítat
+                if elo_h is None or elo_a is None:
+                    continue
 
                 probs = calculate_probs(elo_h, elo_a)
                 bet_name, confidence = pick_best_bet(probs)
@@ -128,7 +160,7 @@ if df is not None:
                 results.append({
                     "Datum": row['DateObj'].strftime("%d.%m. %H:%M"),
                     "Soutěž": row.get('Country', 'EU'),
-                    "Zápas": f"{row.get('Home', 'Domácí')} vs {row.get('Away', 'Hosté')}",
+                    "Zápas": f"{home} vs {away}",
                     "DOPORUČENÁ SÁZKA": bet_name,
                     "Důvěra": confidence * 100,
                     "Férový kurz": fair_odd,
@@ -139,15 +171,14 @@ if df is not None:
         
         progress_bar.empty()
         
-        # --- OPRAVA CHYBY ZDE ---
-        # Vytvoříme DataFrame
         df_res = pd.DataFrame(results)
         
-        # Kontrola, zda DataFrame není prázdný
         if df_res.empty:
-            st.warning("Nepodařilo se vypočítat žádné predikce. (Možná chybí Elo data v souboru).")
-            with st.expander("Zobrazit surová data (Debug)"):
-                st.dataframe(upcoming.head())
+            st.warning("Nepodařilo se vypočítat predikce. (Pravděpodobně se nepodařilo spárovat týmy s Elo databází).")
+            with st.expander("Diagnostika sloupců"):
+                st.write("Sloupce v rozpisu:", df_fix.columns.tolist())
+                if df_elo is not None:
+                    st.write("Sloupce v Elo DB:", df_elo.columns.tolist())
         else:
             # 1. TOP TUTOVKY
             st.header("🔥 TOP TUTOVKY (Důvěra > 70%)")
@@ -162,13 +193,16 @@ if df is not None:
             st.header("💡 CHYTRÉ SÁZKY (Důvěra 55% - 70%)")
             smart_tips = df_res[(df_res["Důvěra"] < 70) & (df_res["Důvěra"] >= 55)].sort_values(by="Důvěra", ascending=False)
             
-            zeme_list = ["Vše"] + sorted(smart_tips["Soutěž"].unique().tolist())
-            vybrana_zeme = st.selectbox("Filtrovat podle země:", zeme_list)
-            
-            if vybrana_zeme != "Vše":
-                smart_tips = smart_tips[smart_tips["Soutěž"] == vybrana_zeme]
+            if not smart_tips.empty:
+                zeme_list = ["Vše"] + sorted(smart_tips["Soutěž"].unique().tolist())
+                vybrana_zeme = st.selectbox("Filtrovat podle země:", zeme_list)
                 
-            st.dataframe(smart_tips.style.format({"Důvěra": "{:.1f} %", "Férový kurz": "{:.2f}", "Elo Rozdíl": "{:.0f}"}), hide_index=True, use_container_width=True)
+                if vybrana_zeme != "Vše":
+                    smart_tips = smart_tips[smart_tips["Soutěž"] == vybrana_zeme]
+                    
+                st.dataframe(smart_tips.style.format({"Důvěra": "{:.1f} %", "Férový kurz": "{:.2f}", "Elo Rozdíl": "{:.0f}"}), hide_index=True, use_container_width=True)
+            else:
+                st.info("Žádné další tipy v této kategorii.")
             
             # 3. GÓLOVÉ TIPY
             st.header("⚽ GÓLOVÉ SPECIÁLY")
