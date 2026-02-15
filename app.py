@@ -1,33 +1,74 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
+import requests
 
-# 1. Nadpis stránky
-st.title("⚽ Můj Sportovní Analytik")
-st.header("Analýza zápasů a predikce")
+# --- KONFIGURACE ---
+# Tady si aplikace sáhne do "trezoru" pro tvůj klíč
+API_KEY = st.secrets["FOOTBALL_API_KEY"]
+BASE_URL = "https://api.football-data.org/v4"
 
-# 2. Textový úvod
-st.write("""
-Vítej v mé aplikaci! Zde budeme sledovat statistiky a předpovídat výsledky.
-Zatím je to jen ukázka, ale brzy sem napojíme živá data.
-""")
+# Nastavení stránky
+st.set_page_config(page_title="Live Sport Data", layout="wide")
+st.title("⚽ Fotbalový Analytik - Premier League")
 
-# 3. Vytvoření fiktivních dat (jako tabulka v Excelu)
-data = pd.DataFrame({
-    'Tým': ['Sparta Praha', 'Slavia Praha', 'Viktoria Plzeň', 'Baník Ostrava'],
-    'Pravděpodobnost výhry (%)': [65, 60, 45, 30],
-    'Forma (body)': [12, 10, 13, 7],
-    'Zranění': [1, 2, 0, 3]
-})
+# --- FUNKCE PRO STAŽENÍ DAT ---
+@st.cache_data(ttl=600) # Data se uloží do paměti na 10 minut (šetříme limity API)
+def nacti_tabulku_pl():
+    headers = {'X-Auth-Token': API_KEY}
+    # Kód 'PL' znamená Premier League
+    url = f"{BASE_URL}/competitions/PL/standings"
+    
+    response = requests.get(url, headers=headers)
+    
+    if response.status_code != 200:
+        st.error(f"Chyba při stahování dat: {response.status_code}")
+        return None
+        
+    data = response.json()
+    # Vytáhneme jen celkovou tabulku (TOTAL)
+    tabulka = data['standings'][0]['table']
+    return tabulka
 
-# 4. Zobrazení tabulky na webu
-st.subheader("Aktuální přehled týmů")
-st.dataframe(data)
+# --- HLAVNÍ ČÁST APLIKACE ---
 
-# 5. Vykreslení grafu
-st.subheader("Graf šancí na výhru")
-st.bar_chart(data.set_index('Tým')['Pravděpodobnost výhry (%)'])
+st.write("Stahuji aktuální data z Anglie...")
 
-# 6. Interaktivní prvek (tlačítko)
-if st.button('Aktualizovat data'):
-    st.success('Data byla úspěšně načtena! (Simulace)')
+raw_data = nacti_tabulku_pl()
+
+if raw_data:
+    # Zpracování dat do hezké tabulky pro Python
+    tymy = []
+    for radek in raw_data:
+        tymy.append({
+            'Pozice': radek['position'],
+            'Tým': radek['team']['name'],
+            'Zápasy': radek['playedGames'],
+            'Výhry': radek['won'],
+            'Remízy': radek['draw'],
+            'Prohry': radek['lost'],
+            'Body': radek['points'],
+            'Góly': f"{radek['goalsFor']}:{radek['goalsAgainst']}",
+            'Forma': radek['form'] # Např. "W,L,W,D,W"
+        })
+    
+    df = pd.DataFrame(tymy)
+    
+    # Zobrazení tabulky
+    st.subheader("Aktuální tabulka Premier League")
+    st.dataframe(df, use_container_width=True)
+    
+    # Jednoduchá vizualizace bodů
+    st.subheader("Porovnání bodů")
+    st.bar_chart(df.set_index('Tým')['Body'])
+    
+    # Analýza formy (Bonus)
+    st.subheader("Tip pro sázení: Týmy s nejlepší formou")
+    st.write("Týmy, které vyhrály posledních 5 zápasů:")
+    # Filtrujeme týmy, které mají ve formě samé výhry (nebo alespoň neprohrály)
+    # Toto je jednoduchý příklad, později to vylepšíme
+    for index, row in df.iterrows():
+        if row['Forma'] and row['Forma'].count('W') >= 4: # 4 a více výher z 5
+            st.success(f"🔥 {row['Tým']} je v ráži! (Forma: {row['Forma']})")
+
+else:
+    st.warning("Nepodařilo se načíst data. Zkontroluj API klíč v Secrets.")
