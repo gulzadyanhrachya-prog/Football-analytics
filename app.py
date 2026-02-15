@@ -3,174 +3,140 @@ import pandas as pd
 import requests
 from datetime import datetime
 
-# --- KONFIGURACE ---
-if "APISPORTS_KEY" in st.secrets:
-    API_KEY = st.secrets["APISPORTS_KEY"]
-else:
-    st.error("Chybí APISPORTS_KEY v Secrets!")
-    st.stop()
+st.set_page_config(page_title="Scraping Master", layout="wide")
 
-URL_BASE = "https://v3.football.api-sports.io"
-HEADERS = {'x-apisports-key': API_KEY}
-
-st.set_page_config(page_title="Betting Master Diagnostic", layout="wide")
-
-# --- DEFINICE LIG ---
-LIGY = {
-    "🇬🇧 Premier League (Anglie 1)": 39,
-    "🇬🇧 Championship (Anglie 2)": 40,
-    "🇨🇿 Fortuna Liga (Česko 1)": 345,
-    "🇩🇪 Bundesliga (Německo 1)": 78,
-    "🇪🇸 La Liga (Španělsko 1)": 140,
-    "🇮🇹 Serie A (Itálie 1)": 135,
-    "🇫🇷 Ligue 1 (Francie 1)": 61,
-    "🇪🇺 Liga Mistrů": 2
+# --- KONFIGURACE URL ADRES ---
+# Tady mapujeme názvy lig na jejich adresy na webu WorldFootball.net
+# Pokud chceš přidat ligu, najdi ji na worldfootball.net a zkopíruj část URL za /competition/
+LIGY_URL = {
+    "🇬🇧 Premier League": "eng-premier-league",
+    "🇬🇧 Championship": "eng-championship",
+    "🇨🇿 Fortuna Liga": "cze-1-liga",
+    "🇩🇪 Bundesliga": "ger-bundesliga",
+    "🇩🇪 2. Bundesliga": "ger-2-bundesliga",
+    "🇪🇸 La Liga": "esp-primera-division",
+    "🇮🇹 Serie A": "ita-serie-a",
+    "🇫🇷 Ligue 1": "fra-ligue-1",
+    "🇳🇱 Eredivisie": "ned-eredivisie",
+    "🇪🇺 Liga Mistrů": "champions-league"
 }
-
-# --- POMOCNÉ FUNKCE ---
-def format_formy(forma_str):
-    if not forma_str: return ""
-    mapping = {"W": "🟢", "D": "⚪", "L": "🔴"}
-    return "".join([mapping.get(char, "❓") for char in forma_str])
 
 # --- SIDEBAR ---
 st.sidebar.title("Nastavení")
-vybrana_liga_nazev = st.sidebar.selectbox("Soutěž:", list(LIGY.keys()))
-LIGA_ID = LIGY[vybrana_liga_nazev]
+vybrana_liga = st.sidebar.selectbox("Soutěž:", list(LIGY_URL.keys()))
+url_slug = LIGY_URL[vybrana_liga]
 
-# Výběr sezóny
-vybrana_sezona = st.sidebar.selectbox("Sezóna (Rok startu):", [2025, 2024, 2023], index=2)
+# Výběr sezóny (WorldFootball používá formát "2023-2024")
+rok = st.sidebar.selectbox("Sezóna:", [2024, 2023], index=0)
+sezona_str = f"{rok}-{rok+1}"
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("🛠️ Diagnostika API")
+st.sidebar.info("Data jsou získávána metodou Scraping z webu worldfootball.net. Není potřeba žádný API klíč.")
 
-# --- NAČÍTÁNÍ DAT S DIAGNOSTIKOU ---
-def nacti_tabulku(liga_id, sezona):
-    url = f"{URL_BASE}/standings"
-    querystring = {"season": str(sezona), "league": str(liga_id)}
+# --- FUNKCE PRO SCRAPING ---
+@st.cache_data(ttl=3600) # Ukládáme do paměti na 1 hodinu
+def scrape_data(league_slug, season_str):
+    # 1. Sestavíme URL
+    base_url = f"https://www.worldfootball.net/competition/{league_slug}-{season_str}"
+    
+    # 2. Musíme se tvářit jako prohlížeč, jinak nás zablokují
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
     
     try:
-        response = requests.get(url, headers=HEADERS, params=querystring)
-        data = response.json()
-        
-        # VYPÍŠEME CHYBY PŘÍMO DO SIDEBARU
-        if "errors" in data and data["errors"]:
-            st.sidebar.error("CHYBA API:")
-            st.sidebar.json(data["errors"])
-            return None, None
-            
-        if "response" not in data or not data['response']:
-            st.sidebar.warning(f"API vrátilo prázdná data pro sezónu {sezona}.")
-            st.sidebar.write("Tip: Zkus přepnout na rok 2023.")
-            return None, None
+        # Stáhneme stránku
+        response = requests.get(base_url, headers=headers)
+        if response.status_code != 200:
+            return None, None, f"Chyba připojení: {response.status_code}"
 
-        standings = data['response'][0]['league']['standings'][0]
+        # Pandas umí automaticky najít všechny tabulky v HTML
+        # Toto je ta magická část
+        dfs = pd.read_html(response.text)
         
-        tymy_info = {}
-        seznam_tymu = [] 
+        # WorldFootball má obvykle tabulku ligy jako první nebo druhou tabulku na stránce
+        # Musíme najít tu správnou. Hledáme tu, která má sloupec "Team" nebo "Tým" nebo "#"
+        tabulka_df = None
+        for df in dfs:
+            if "Team" in df.columns and "Pt" in df.columns: # Pt = Points
+                tabulka_df = df
+                break
+            # Alternativa pro některé ligy
+            if "Team" in df.columns and "Pts" in df.columns:
+                tabulka_df = df
+                break
         
-        for radek in standings:
-            tym_nazev = radek['team']['name']
-            logo = radek['team']['logo']
-            body = radek['points']
-            skore_plus = radek['all']['goals']['for']
-            skore_minus = radek['all']['goals']['against']
-            rozdil_skore = radek['goalsDiff']
-            forma = radek['form'] 
-            
-            bonus_formy = 0
-            if forma:
-                bonus_formy = forma.count("W") * 3 + forma.count("D") * 1
-            
-            sila = body + bonus_formy + (rozdil_skore / 2)
-            
-            tymy_info[tym_nazev] = {
-                "sila": sila,
-                "logo": logo,
-                "forma_visual": format_formy(forma),
-                "pozice": radek['rank'],
-                "skore": f"{skore_plus}:{skore_minus}"
-            }
-            
-            seznam_tymu.append({
-                "Pozice": radek['rank'],
-                "Tým": tym_nazev,
-                "Body": body,
-                "Skóre": f"{skore_plus}:{skore_minus}",
-                "Forma": format_formy(forma)
-            })
-            
-        return tymy_info, pd.DataFrame(seznam_tymu)
+        if tabulka_df is None:
+            return None, None, "Nepodařilo se najít tabulku na stránce."
+
+        # Vyčistíme tabulku
+        # Přejmenujeme sloupce pro lepší čitelnost
+        # Struktura WorldFootball: #, Team, M., W, D, L, Goals, Dif, Pt
+        rename_map = {
+            "Team": "Tým",
+            "M.": "Zápasy",
+            "W": "Výhry",
+            "D": "Remízy",
+            "L": "Prohry",
+            "Goals": "Skóre",
+            "Dif": "Rozdíl",
+            "Pt": "Body",
+            "Pts": "Body"
+        }
+        tabulka_df = tabulka_df.rename(columns=rename_map)
         
+        # Získáme i zápasy? 
+        # Na hlavní stránce soutěže bývají "Current round" (aktuální kolo)
+        # Zkusíme najít tabulku, která má datum a čas
+        zapasy_df = None
+        for df in dfs:
+            # Hledáme tabulku, která má sloupec s datem (často nepojmenovaný) a dva týmy
+            if len(df.columns) >= 5 and df.shape[0] > 0:
+                # Jednoduchá heuristika: pokud tabulka obsahuje pomlčku "-" ve sloupci skóre nebo času
+                if df.iloc[0].astype(str).str.contains("-").any():
+                     # Často je to tabulka s aktuálním kolem
+                     zapasy_df = df
+                     break
+        
+        return tabulka_df, zapasy_df, None
+
     except Exception as e:
-        st.sidebar.error(f"Kritická chyba kódu: {e}")
-        return None, None
-
-def nacti_zapasy(liga_id, sezona):
-    url = f"{URL_BASE}/fixtures"
-    querystring = {"season": str(sezona), "league": str(liga_id), "next": "10"}
-    try:
-        response = requests.get(url, headers=HEADERS, params=querystring)
-        data = response.json()
-        if "errors" in data and data["errors"]:
-            return []
-        return data['response']
-    except:
-        return []
+        return None, None, f"Chyba scrapingu: {e}"
 
 # --- UI APLIKACE ---
-st.title(f"⚽ {vybrana_liga_nazev}")
-st.caption(f"Sezóna: {vybrana_sezona}/{vybrana_sezona+1}")
+st.title(f"⚽ {vybrana_liga}")
+st.caption(f"Zdroj dat: WorldFootball.net | Sezóna {sezona_str}")
 
-with st.spinner("Komunikuji se serverem..."):
-    tymy_db, df_tabulka = nacti_tabulku(LIGA_ID, vybrana_sezona)
+with st.spinner("Stahuji data z webu..."):
+    df_tabulka, df_zapasy, error = scrape_data(url_slug, sezona_str)
 
-if not tymy_db:
-    st.warning("Žádná data k zobrazení. Podívej se vlevo do sekce 'Diagnostika API'.")
+if error:
+    st.error(error)
+    st.write("Možné příčiny:")
+    st.write("1. Tato liga v sezóně {sezona_str} na webu neexistuje.")
+    st.write("2. Web změnil strukturu a scraper potřebuje úpravu.")
 else:
-    tab1, tab2 = st.tabs(["🔮 Predikce", "📊 Tabulka"])
+    tab1, tab2 = st.tabs(["📊 Tabulka", "📅 Aktuální kolo"])
     
     with tab1:
-        zapasy = nacti_zapasy(LIGA_ID, vybrana_sezona)
-        if not zapasy:
-            st.info("Žádné zápasy.")
+        if df_tabulka is not None:
+            # Vybereme jen důležité sloupce
+            cols = ["#", "Tým", "Zápasy", "Výhry", "Remízy", "Prohry", "Skóre", "Body"]
+            # Filtrujeme jen sloupce, které v tabulce skutečně jsou
+            dostupne_cols = [c for c in cols if c in df_tabulka.columns]
+            
+            st.dataframe(df_tabulka[dostupne_cols], hide_index=True, use_container_width=True)
+            
+            # Vizualizace síly (Body)
+            if "Tým" in df_tabulka.columns and "Body" in df_tabulka.columns:
+                st.bar_chart(df_tabulka.set_index("Tým")["Body"])
         else:
-            for zapas in zapasy:
-                domaci = zapas['teams']['home']['name']
-                hoste = zapas['teams']['away']['name']
-                datum = datetime.fromisoformat(zapas['fixture']['date'].replace("Z", "+00:00")).strftime("%d.%m. %H:%M")
-                
-                info_d = tymy_db.get(domaci)
-                info_h = tymy_db.get(hoste)
-                
-                with st.container():
-                    c1, c2, c3, c4, c5 = st.columns([1, 3, 2, 3, 1])
-                    
-                    # Zobrazíme data jen pokud máme info o obou týmech
-                    if info_d and info_h:
-                        sila_d = info_d['sila'] + 15
-                        sila_h = info_h['sila']
-                        celkova = sila_d + sila_h
-                        if celkova == 0: celkova = 1
-                        proc_d = (sila_d / celkova) * 100
-                        proc_h = (sila_h / celkova) * 100
-                        
-                        with c2: 
-                            st.image(info_d['logo'], width=30)
-                            st.write(f"**{domaci}**")
-                            st.caption(info_d['forma_visual'])
-                        with c3: 
-                            st.write(f"*{datum}*")
-                            st.markdown(f"#### {int(proc_d)}% : {int(proc_h)}%")
-                        with c4: 
-                            st.image(info_h['logo'], width=30)
-                            st.write(f"**{hoste}**")
-                            st.caption(info_h['forma_visual'])
-                    else:
-                        # Fallback pokud nemáme data o týmech
-                        with c3: st.write(f"{domaci} vs {hoste}")
-                    
-                    st.markdown("---")
+            st.warning("Tabulka nenalezena.")
 
     with tab2:
-        st.dataframe(df_tabulka, hide_index=True, use_container_width=True)
+        if df_zapasy is not None:
+            st.write("Nalezené zápasy (Aktuální kolo):")
+            # Zobrazíme surovou tabulku zápasů, protože parsing HTML zápasů je složitý
+            st.dataframe(df_zapasy, hide_index=True, use_container_width=True)
+            st.info("Poznámka: Toto jsou data přímo z webu. Pro predikce bychom museli složitě čistit názvy týmů.")
+        else:
+            st.info("Na stránce nebyly nalezeny žádné aktuální zápasy.")
