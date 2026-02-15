@@ -5,10 +5,14 @@ from scipy.stats import poisson
 from datetime import datetime, timedelta
 import requests
 import io
+import urllib.parse
 
-st.set_page_config(page_title="Betting Auto-Pilot v16", layout="wide")
+st.set_page_config(page_title="Betting Auto-Pilot v17", layout="wide")
 
-# ==============================================================================\n# MODUL 1: FOTBAL (ClubElo Math Model)\n# ==============================================================================\n
+# ==============================================================================
+# MODUL 1: FOTBAL (ClubElo Math Model) - TOHLE FUNGUJE
+# ==============================================================================
+
 def app_fotbal():
     st.header("⚽ Fotbalový Auto-Pilot")
     st.caption("Zdroj: ClubElo API (Oficiální data + Matematický model)")
@@ -134,108 +138,159 @@ def app_fotbal():
             else: st.warning("Nepodařilo se vypočítat predikce.")
     else: st.error("Chyba ClubElo API.")
 
-# ==============================================================================\n# MODUL 2: TENIS (VitiSport přes Proxy)\n# ==============================================================================\n
+# ==============================================================================
+# MODUL 2: TENIS (AllOrigins JSON Proxy) - NOVÁ METODA
+# ==============================================================================
+
 def app_tenis():
     st.header("🎾 Tenisový Auto-Pilot")
-    st.caption("Zdroj: VitiSport.cz (Tunelováno přes Proxy)")
+    st.caption("Zdroj: TennisExplorer (přes AllOrigins Proxy)")
 
     @st.cache_data(ttl=1800)
-    def scrape_vitisport_proxy():
-        # Použijeme Proxy Tunel, abychom se vyhnuli chybě "Empty Document"
-        target_url = "https://www.vitisport.cz/index.php?g=tenis&lang=en"
-        proxy_url = f"https://corsproxy.io/?{target_url}"
+    def scrape_tennis_via_allorigins(date_obj):
+        # 1. Sestavíme URL pro TennisExplorer
+        year = date_obj.year
+        month = date_obj.month
+        day = date_obj.day
+        target_url = f"https://www.tennisexplorer.com/matches/?type=all&year={year}&month={month}&day={day}"
         
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
+        # 2. Zabalíme to do AllOrigins (vrátí JSON s HTML uvnitř)
+        # Tím obejdeme blokování, protože požadavek jde z jejich serveru
+        proxy_url = f"https://api.allorigins.win/get?url={urllib.parse.quote(target_url)}"
         
         try:
-            r = requests.get(proxy_url, headers=headers)
-            if r.status_code != 200: return [], f"Chyba HTTP {r.status_code}"
-            if not r.text: return [], "Prázdná odpověď od serveru."
+            r = requests.get(proxy_url)
+            data = r.json()
+            html_content = data.get("contents")
             
-            dfs = pd.read_html(r.text)
+            if not html_content: return [], "Prázdný obsah z proxy."
+            
+            # 3. Přečteme HTML pomocí Pandas
+            dfs = pd.read_html(html_content)
+            
             matches = []
+            current_tournament = "Neznámý turnaj"
             
-            # Projdeme všechny tabulky
+            # Hledáme správnou tabulku
+            target_df = None
             for df in dfs:
-                df = df.astype(str)
-                if len(df.columns) < 4: continue
-                
-                for idx, row in df.iterrows():
-                    try:
-                        row_list = row.values.tolist()
+                if len(df.columns) > 4:
+                    sample = str(df.head(5))
+                    if ":" in sample:
+                        target_df = df
+                        break
+            
+            if target_df is None: return [], "Tabulka nenalezena."
+
+            # 4. Parsování
+            for idx, row in target_df.iterrows():
+                try:
+                    col0 = str(row.iloc[0])
+                    
+                    # Turnaj
+                    if ":" not in col0 and len(col0) > 3:
+                        current_tournament = col0
+                        continue
+                    
+                    # Zápas
+                    if ":" in col0:
+                        # TennisExplorer: Time | Player | Score | Sets | Odds1 | Odds2
+                        odds1 = row.iloc[-2]
+                        odds2 = row.iloc[-1]
                         
-                        # Hledáme čas (XX:XX)
-                        cas = next((x for x in row_list if ":" in str(x) and len(str(x)) < 6), None)
-                        if not cas: continue
-                        
-                        # Hledáme tip (1 nebo 2)
-                        tip = None
-                        for item in row_list:
-                            if item in ["1", "2"]:
-                                tip = item
-                                break
-                        if not tip: continue
-                        
-                        # Hledáme jména hráčů
-                        strings = [str(x) for x in row_list if len(str(x)) > 3 and ":" not in str(x) and "Tip" not in str(x)]
-                        if len(strings) >= 2:
-                            p1 = strings[0]
-                            p2 = strings[1]
+                        try:
+                            o1 = float(odds1)
+                            o2 = float(odds2)
+                        except: continue 
                             
-                            if "Home" in p1 or "Away" in p1: continue
+                        players = str(row.iloc[1])
+                        if " - " in players:
+                            p1, p2 = players.split(" - ", 1)
                             
                             matches.append({
-                                "Čas": cas,
+                                "Datum": date_obj.strftime("%d.%m."),
+                                "Čas": col0,
+                                "Turnaj": current_tournament,
                                 "Hráč 1": p1,
                                 "Hráč 2": p2,
-                                "Tip": tip
+                                "Kurz 1": o1,
+                                "Kurz 2": o2
                             })
-                    except: continue
+                except: continue
             return matches, None
-        except Exception as e: return [], str(e)
-
-    with st.spinner("Stahuji tenisové tipy přes proxy..."):
-        matches, error = scrape_vitisport_proxy()
-
-    if error:
-        st.error(f"Chyba: {error}")
-    elif not matches:
-        st.warning("Nebyly nalezeny žádné tenisové tipy.")
-    else:
-        # Zpracování do tabulky
-        data = []
-        for m in matches:
-            doporuceni = f"Výhra {m['Hráč 1']}" if m['Tip'] == "1" else f"Výhra {m['Hráč 2']}"
-            data.append({
-                "Čas": m['Čas'],
-                "Zápas": f"{m['Hráč 1']} vs {m['Hráč 2']}",
-                "DOPORUČENÁ SÁZKA": doporuceni,
-                "Tip Kód": m['Tip']
-            })
             
-        df_tenis = pd.DataFrame(data)
-        
-        st.subheader(f"🔥 Nalezeno {len(df_tenis)} tenisových tipů")
+        except Exception as e:
+            return [], str(e)
+
+    # --- LOGIKA ---
+    dnes = datetime.now()
+    zitra = dnes + timedelta(days=1)
+    
+    with st.spinner("Stahuji tenisové zápasy (Dnešek + Zítřek)..."):
+        zapasy_dnes, err1 = scrape_tennis_via_allorigins(dnes)
+        zapasy_zitra, err2 = scrape_tennis_via_allorigins(zitra)
+        vsechny_zapasy = zapasy_dnes + zapasy_zitra
+
+    if not vsechny_zapasy:
+        st.error("Nepodařilo se stáhnout data.")
+        with st.expander("Detaily chyby"):
+            st.write(f"Dnešek: {err1}")
+            st.write(f"Zítřek: {err2}")
+    else:
+        # Filtr turnajů
+        turnaje = sorted(list(set([z["Turnaj"] for z in vsechny_zapasy])))
         
         c1, c2 = st.columns(2)
-        
-        with c1:
-            st.info("Tipy na Domácího (1)")
-            df_1 = df_tenis[df_tenis["Tip Kód"] == "1"]
-            if not df_1.empty:
-                st.dataframe(df_1[["Čas", "Zápas", "DOPORUČENÁ SÁZKA"]], hide_index=True, use_container_width=True)
-            else: st.write("Žádné tipy.")
-            
-        with c2:
-            st.error("Tipy na Hosté (2)")
-            df_2 = df_tenis[df_tenis["Tip Kód"] == "2"]
-            if not df_2.empty:
-                st.dataframe(df_2[["Čas", "Zápas", "DOPORUČENÁ SÁZKA"]], hide_index=True, use_container_width=True)
-            else: st.write("Žádné tipy.")
+        with c1: filtr_turnaj = st.selectbox("Filtrovat Turnaj:", ["Vše"] + turnaje)
+        with c2: jen_atp = st.checkbox("Ukázat jen ATP/WTA", value=True)
 
-# ==============================================================================\n# HLAVNÍ ROZCESTNÍK\n# ==============================================================================\n
+        st.subheader(f"Nalezeno {len(vsechny_zapasy)} zápasů")
+        
+        count = 0
+        for z in vsechny_zapasy:
+            if jen_atp and ("ATP" not in z["Turnaj"] and "WTA" not in z["Turnaj"]): continue
+            if filtr_turnaj != "Vše" and z["Turnaj"] != filtr_turnaj: continue
+            
+            count += 1
+            
+            # Výpočet predikce z kurzů
+            prob1 = (1 / z["Kurz 1"])
+            prob2 = (1 / z["Kurz 2"])
+            margin = prob1 + prob2 
+            
+            real_prob1 = (prob1 / margin) * 100
+            real_prob2 = (prob2 / margin) * 100
+            
+            with st.container():
+                c1, c2, c3, c4, c5 = st.columns([2, 3, 2, 3, 2])
+                
+                with c1: 
+                    st.caption(f"{z['Datum']} {z['Čas']}")
+                    st.caption(z["Turnaj"][:25])
+                
+                with c2: 
+                    st.write(f"**{z['Hráč 1']}**")
+                    st.write(f"Kurz: {z['Kurz 1']}")
+                
+                with c3:
+                    st.markdown(f"<h4 style='text-align: center'>{int(real_prob1)}% : {int(real_prob2)}%</h4>", unsafe_allow_html=True)
+                    if real_prob1 > 60: st.success(f"Tip: {z['Hráč 1']}")
+                    elif real_prob2 > 60: st.error(f"Tip: {z['Hráč 2']}")
+                    else: st.warning("Vyrovnané")
+                    
+                with c4:
+                    st.write(f"**{z['Hráč 2']}**")
+                    st.write(f"Kurz: {z['Kurz 2']}")
+                
+                st.markdown("---")
+        
+        if count == 0:
+            st.info("Žádné zápasy neodpovídají filtru.")
+
+# ==============================================================================
+# HLAVNÍ ROZCESTNÍK
+# ==============================================================================
+
 st.sidebar.title("🏆 Sportovní Centrum")
 sport = st.sidebar.radio("Vyber sport:", ["⚽ Fotbal Auto-Pilot", "🎾 Tenis Auto-Pilot"])
 
