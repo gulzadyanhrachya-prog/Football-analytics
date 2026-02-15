@@ -1,24 +1,37 @@
 import streamlit as st
 import pandas as pd
-import cloudscraper # TOTO JE KLÍČ K ÚSPĚCHU
+import requests
 import numpy as np
 from datetime import datetime
 
-st.set_page_config(page_title="Universal Sport Predictor", layout="wide")
+st.set_page_config(page_title="Sport Betting Hub v8", layout="wide")
+
+# --- MAGICKÁ FUNKCE PRO OBCHÁZENÍ 403 ---
+# Tato funkce pošle požadavek přes prostředníka (Proxy)
+def get_html_via_proxy(url):
+    # Použijeme corsproxy.io jako tunel
+    proxy_url = f"https://corsproxy.io/?{url}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    try:
+        response = requests.get(proxy_url, headers=headers)
+        return response
+    except Exception as e:
+        return None
 
 # ==========================================
-# 1. MODUL: FOTBAL (WorldFootball.net)
+# 1. MODUL: FOTBAL (WorldFootball přes Proxy)
 # ==========================================
 
 def app_fotbal():
     st.header("⚽ Fotbalový Svět")
-    st.caption("Zdroj: WorldFootball.net (Bypassing 403 Protection)")
+    st.caption("Zdroj: WorldFootball.net (Tunelováno přes Proxy)")
 
-    # --- DEFINICE LIG (Slugy pro URL) ---
+    # --- DEFINICE LIG ---
     LIGY = {
-        # Hlavní
         "🇬🇧 Premier League": "eng-premier-league",
-        "🇬🇧 Championship (Anglie 2)": "eng-championship",
+        "🇬🇧 Championship": "eng-championship",
         "🇩🇪 Bundesliga": "ger-bundesliga",
         "🇩🇪 2. Bundesliga": "ger-2-bundesliga",
         "🇪🇸 La Liga": "esp-primera-division",
@@ -27,22 +40,20 @@ def app_fotbal():
         "🇫🇷 Ligue 1": "fra-ligue-1",
         "🇫🇷 Ligue 2": "fra-ligue-2",
         "🇳🇱 Eredivisie": "ned-eredivisie",
-        "🇳🇱 Eerste Divisie (Holandsko 2)": "ned-eerste-divisie",
-        # Další Evropa
+        "🇳🇱 Eerste Divisie": "ned-eerste-divisie",
         "🇨🇿 Fortuna Liga": "cze-1-liga",
-        "🇵🇱 Ekstraklasa (Polsko)": "pol-ekstraklasa",
-        "🇩🇰 Superliga (Dánsko)": "dnk-superliga",
-        "🇵🇹 Primeira Liga (Portugalsko)": "por-primeira-liga",
-        "🇷🇴 Liga 1 (Rumunsko)": "rom-liga-1",
-        "🇬🇷 Super League (Řecko)": "gre-super-league",
-        "🇧🇬 Parva Liga (Bulharsko)": "bul-a-grupa",
-        "🇮🇱 Premier League (Izrael)": "isr-ligat-haal",
-        "🇸🇮 PrvaLiga (Slovinsko)": "svn-prvaliga",
-        "🇷🇸 SuperLiga (Srbsko)": "srb-super-liga",
-        "🇹🇷 SüperLig (Turecko)": "tur-sueper-lig"
+        "🇵🇱 Ekstraklasa": "pol-ekstraklasa",
+        "🇩🇰 Superliga": "dnk-superliga",
+        "🇵🇹 Primeira Liga": "por-primeira-liga",
+        "🇷🇴 Liga 1": "rom-liga-1",
+        "🇬🇷 Super League": "gre-super-league",
+        "🇧🇬 Parva Liga": "bul-a-grupa",
+        "🇮🇱 Premier League": "isr-ligat-haal",
+        "🇸🇮 PrvaLiga": "svn-prvaliga",
+        "🇷🇸 SuperLiga": "srb-super-liga",
+        "🇹🇷 SüperLig": "tur-sueper-lig"
     }
 
-    # --- UI ---
     c1, c2 = st.columns([2, 1])
     with c1: vybrana_liga = st.selectbox("Vyber ligu:", list(LIGY.keys()))
     with c2: rok = st.selectbox("Sezóna (začátek):", [2025, 2024, 2023], index=1)
@@ -50,24 +61,20 @@ def app_fotbal():
     slug = LIGY[vybrana_liga]
     sezona_str = f"{rok}-{rok+1}"
 
-    # --- SCRAPING FUNKCE (S Cloudscraperem) ---
     @st.cache_data(ttl=3600)
     def scrape_worldfootball(league_slug, season):
         url = f"https://www.worldfootball.net/competition/{league_slug}-{season}/"
         
-        # Vytvoříme maskovaného robota
-        scraper = cloudscraper.create_scraper()
+        # POUŽITÍ PROXY
+        r = get_html_via_proxy(url)
+        
+        if r is None or r.status_code != 200:
+            return None, None, f"Chyba připojení (Status: {r.status_code if r else 'Error'})"
         
         try:
-            r = scraper.get(url)
-            if r.status_code == 404:
-                return None, None, f"Sezóna {season} pro tuto ligu ještě neexistuje."
-            if r.status_code != 200:
-                return None, None, f"Chyba připojení: {r.status_code}"
-            
             dfs = pd.read_html(r.text)
             
-            # 1. Najít tabulku (Standings)
+            # 1. Tabulka
             df_table = None
             for df in dfs:
                 cols = [str(c).lower() for c in df.columns]
@@ -75,7 +82,7 @@ def app_fotbal():
                     df_table = df
                     break
             
-            # 2. Najít zápasy (Schedule)
+            # 2. Zápasy
             df_matches = None
             for df in dfs:
                 if len(df.columns) >= 3:
@@ -85,20 +92,18 @@ def app_fotbal():
                         if not any("pt" in c for c in cols):
                             df_matches = df
                             break
-            
             return df_table, df_matches, None
-
         except Exception as e:
             return None, None, str(e)
 
-    # --- LOGIKA ---
-    with st.spinner(f"Stahuji data z WorldFootball.net ({sezona_str})..."):
+    with st.spinner(f"Stahuji data pro {vybrana_liga}..."):
         df_tab, df_match, err = scrape_worldfootball(slug, sezona_str)
 
     if err:
         st.error(err)
+        st.write("Tip: Pokud vidíš chybu 404, tato liga v sezóně 2025 ještě neexistuje. Přepni na 2024.")
     else:
-        # Zpracování tabulky pro sílu týmů
+        # Výpočet síly
         sila_tymu = {}
         if df_tab is not None:
             try:
@@ -108,61 +113,48 @@ def app_fotbal():
                 
                 for idx, row in df_tab.iterrows():
                     tym = str(row[col_team])
-                    body = float(row[col_pts])
+                    try: body = float(row[col_pts])
+                    except: body = 0
                     
                     goals = str(row[col_goals])
                     diff = 0
                     if ":" in goals:
-                        g_pro, g_proti = map(int, goals.split(":"))
-                        diff = g_pro - g_proti
+                        parts = goals.split(":")
+                        diff = int(parts[0]) - int(parts[1])
                     
-                    sila = body + (diff / 2)
-                    sila_tymu[tym] = sila
-            except:
-                st.warning("Nepodařilo se zpracovat detaily tabulky.")
+                    sila_tymu[tym] = body + (diff / 2)
+            except: pass
 
-        # Zobrazení
         tab1, tab2 = st.tabs(["📅 Zápasy a Predikce", "📊 Tabulka"])
         
         with tab1:
             if df_match is not None:
-                st.subheader("Aktuální / Nadcházející kolo")
-                
+                st.subheader("Aktuální kolo")
                 for idx, row in df_match.iterrows():
                     try:
                         cas = str(row[0])
                         domaci = str(row[1])
-                        hoste = str(row[3]) 
+                        hoste = str(row[3])
                         
                         if "Team" in domaci or pd.isna(domaci): continue
                         
-                        s_d = 0
-                        s_h = 0
-                        
+                        s_d = 0; s_h = 0
                         for t_name, s_val in sila_tymu.items():
                             if domaci in t_name or t_name in domaci: s_d = s_val
                             if hoste in t_name or t_name in hoste: s_h = s_val
                         
-                        tip = ""
-                        barva = "gray"
-                        
+                        tip = ""; barva = "gray"
                         if s_d > 0 and s_h > 0:
-                            s_d += 5 # Domácí výhoda
+                            s_d += 5
                             total = s_d + s_h
                             p_d = (s_d / total) * 100
                             p_h = (s_h / total) * 100
                             
-                            if p_d > 55: 
-                                tip = f"Tip: {domaci} ({int(p_d)}%)"
-                                barva = "green"
-                            elif p_h > 55: 
-                                tip = f"Tip: {hoste} ({int(p_h)}%)"
-                                barva = "red"
-                            else: 
-                                tip = "Vyrovnané / Remíza"
-                                barva = "orange"
+                            if p_d > 55: tip = f"Tip: {domaci} ({int(p_d)}%)"; barva = "green"
+                            elif p_h > 55: tip = f"Tip: {hoste} ({int(p_h)}%)"; barva = "red"
+                            else: tip = "Vyrovnané"; barva = "orange"
                         else:
-                            tip = "Nedostatek dat pro predikci"
+                            tip = "Nedostatek dat"
 
                         with st.container():
                             c1, c2, c3 = st.columns([3, 2, 3])
@@ -177,74 +169,62 @@ def app_fotbal():
                             st.markdown("---")
                     except: continue
             else:
-                st.info("Rozpis zápasů nebyl na stránce nalezen.")
+                st.info("Rozpis nenalezen.")
 
         with tab2:
             if df_tab is not None:
                 st.dataframe(df_tab, hide_index=True, use_container_width=True)
-            else:
-                st.warning("Tabulka ligy nebyla nalezena.")
-
 
 # ==========================================
-# 2. MODUL: TENIS (BettingClosed s Cloudscraperem)
+# 2. MODUL: TENIS (BettingClosed přes Proxy)
 # ==========================================
 
 def app_tenis():
     st.header("🎾 Tenisové Predikce")
-    st.caption("Zdroj: BettingClosed.com (Dnešní zápasy)")
+    st.caption("Zdroj: BettingClosed.com (Tunelováno přes Proxy)")
 
     @st.cache_data(ttl=1800)
-    def scrape_bettingclosed():
+    def scrape_bettingclosed_proxy():
         url = "https://www.bettingclosed.com/predictions/date-matches/today/tennis/"
         
-        # Použijeme Cloudscraper i zde
-        scraper = cloudscraper.create_scraper()
+        # POUŽITÍ PROXY
+        r = get_html_via_proxy(url)
         
+        if r is None or r.status_code != 200:
+            return [], f"Chyba {r.status_code if r else 'Connection'}"
+            
         try:
-            r = scraper.get(url)
-            if r.status_code != 200: return [], f"Chyba {r.status_code}"
-            
             dfs = pd.read_html(r.text)
-            
             matches = []
+            
             for df in dfs:
                 df_str = df.astype(str)
                 if len(df) > 5:
                     for idx, row in df_str.iterrows():
                         row_text = " ".join(row.values)
-                        
                         if "-" in row_text and ("1" in row_text or "2" in row_text):
                             try:
                                 cas = row[0]
-                                zapas = row[2] 
-                                predikce = row.iloc[-1] 
-                                
+                                zapas = row[2]
+                                predikce = row.iloc[-1]
                                 if len(zapas) > 5 and "-" in zapas:
-                                    matches.append({
-                                        "Čas": cas,
-                                        "Zápas": zapas,
-                                        "Predikce": predikce
-                                    })
+                                    matches.append({"Čas": cas, "Zápas": zapas, "Predikce": predikce})
                             except: continue
-                    
-                    if len(matches) > 0: break 
-            
+                    if len(matches) > 0: break
             return matches, None
-            
         except Exception as e:
             return [], str(e)
 
     with st.spinner("Stahuji tenisové tipy..."):
-        matches, error = scrape_bettingclosed()
+        matches, error = scrape_bettingclosed_proxy()
 
     if error:
         st.error(f"Chyba: {error}")
+        st.write("Zkus obnovit stránku za chvíli.")
     elif not matches:
-        st.warning("Nepodařilo se načíst zápasy. Web mohl změnit strukturu.")
+        st.warning("Nebyly nalezeny žádné zápasy.")
     else:
-        st.success(f"Nalezeno {len(matches)} zápasů s predikcí.")
-        
+        st.success(f"Nalezeno {len(matches)} zápasů.")
         for m in matches:
             with st.container():
                 c1, c2 = st.columns([3, 1])
