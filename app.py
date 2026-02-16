@@ -1,74 +1,62 @@
-import streamlit as st
-import requests
+rowse files". Nahraj tam ten stažený soubor.import streamlit as st
+import json
+import yaml # Pro jistotu, kdyby to bylo YAML
 
-st.set_page_config(page_title="Key Cracker", layout="wide")
-st.title("🔐 Hledání správného způsobu přihlášení")
+st.set_page_config(page_title="OpenAPI Reader", layout="wide")
+st.title("📂 Analyzátor OpenAPI Dokumentu")
 
-# 1. Načtení klíče
-try:
-    API_KEY = st.secrets["SGO_KEY"]
-    st.info(f"Testuji klíč: {API_KEY[:5]}...*****")
-except:
-    st.error("Chybí SGO_KEY v Secrets!")
-    st.stop()
+st.write("Nahraj sem ten soubor, co jsi stáhl (obvykle swagger.json nebo openapi.yaml).")
 
-# 2. Adresa pro test (Seznam sportů - to by mělo fungovat vždy)
-TEST_URL = "https://api.sportsgameodds.com/v1/sports"
+uploaded_file = st.file_uploader("Vyber soubor", type=["json", "yaml", "yml", "txt"])
 
-# 3. Definice metod přihlášení
-methods = [
-    {
-        "name": "Header: X-Api-Key",
-        "headers": {"X-Api-Key": API_KEY},
-        "params": {}
-    },
-    {
-        "name": "Header: x-api-key (malá písmena)",
-        "headers": {"x-api-key": API_KEY},
-        "params": {}
-    },
-    {
-        "name": "Header: Authorization Bearer",
-        "headers": {"Authorization": f"Bearer {API_KEY}"},
-        "params": {}
-    },
-    {
-        "name": "Header: apikey",
-        "headers": {"apikey": API_KEY},
-        "params": {}
-    },
-    {
-        "name": "URL Parametr: ?key=...",
-        "headers": {},
-        "params": {"key": API_KEY}
-    },
-    {
-        "name": "URL Parametr: ?api_key=...",
-        "headers": {},
-        "params": {"api_key": API_KEY}
-    }
-]
-
-# 4. Spuštění testu
-if st.button("SPUSTIT TEST PŘIHLÁŠENÍ"):
-    success = False
-    
-    for method in methods:
-        st.write(f"Zkouším metodu: **{method['name']}**...")
-        
+if uploaded_file is not None:
+    try:
+        # Zkusíme načíst jako JSON
+        content = json.load(uploaded_file)
+        st.success("✅ Soubor načten jako JSON.")
+    except:
         try:
-            r = requests.get(TEST_URL, headers=method["headers"], params=method["params"])
-            
-            if r.status_code == 200:
-                st.success(f"🎉 ÚSPĚCH! Funguje metoda: {method['name']}")
-                st.json(r.json())
-                success = True
-                break # Našli jsme to, končíme
-            else:
-                st.warning(f"❌ Neúspěch (Kód {r.status_code})")
-                
+            # Pokud ne, zkusíme jako YAML
+            uploaded_file.seek(0)
+            content = yaml.safe_load(uploaded_file)
+            st.success("✅ Soubor načten jako YAML.")
         except Exception as e:
-            st.error(f"Chyba spojení: {e}")
+            st.error(f"Nepodařilo se přečíst soubor: {e}")
+            st.stop()
+
+    # --- HLEDÁNÍ PŘIHLAŠOVACÍCH ÚDAJŮ ---
+    st.header("🔐 Jak se přihlásit?")
+    
+    security_schemes = content.get("components", {}).get("securitySchemes", {})
+    if not security_schemes:
+        # Starší verze Swaggeru
+        security_schemes = content.get("securityDefinitions", {})
+        
+    if security_schemes:
+        st.json(security_schemes)
+        
+        # Analýza pro člověka
+        for name, details in security_schemes.items():
+            typ = details.get("type")
+            in_loc = details.get("in") # header / query
+            key_name = details.get("name") # To je to, co hledáme!
             
-    if not success:
-        st.error("⛔ Žádná metoda nefungovala. Zkontroluj, zda je klíč správně zkopírovaný (bez mezer) a zda je aktivní.")
+            st.info(f"👉 **Musíme poslat klíč v: {in_loc}**")
+            st.info(f"👉 **Název parametru musí být: `{key_name}`**")
+    else:
+        st.warning("V dokumentu nebyla nalezena sekce 'securitySchemes'.")
+
+    # --- HLEDÁNÍ ADRESY SERVERU ---
+    st.header("🌍 Adresa serveru (Base URL)")
+    servers = content.get("servers", [])
+    if servers:
+        st.write(servers)
+    else:
+        host = content.get("host")
+        basePath = content.get("basePath", "")
+        if host:
+            st.write(f"Host: https://{host}{basePath}")
+
+    # --- ZOBRAZENÍ CELÉHO SOUBORU (PRO KONTROLU) ---
+    with st.expander("Zobrazit celý obsah souboru"):
+        st.json(content)
