@@ -1,293 +1,202 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-from scipy.stats import poisson
-from datetime import datetime, timedelta
 import requests
+import numpy as np
+from datetime import datetime
 import io
+from scipy.stats import poisson
 
-st.set_page_config(page_title="OddsBlaze Replica", layout="wide")
+st.set_page_config(page_title="Bet365 Odds Scanner", layout="wide")
 
-# ==============================================================================\n# POMOCNÉ FUNKCE (PROXY & MATH)\n# ==============================================================================\n
-def get_html_via_proxy(url):
-    proxy_url = f"https://corsproxy.io/?{url}"
+# ==============================================================================\n# 1. KONFIGURACE A API VOLÁNÍ\n# ==============================================================================\n
+try:
+    API_KEY = st.secrets["RAPID_API_KEY"]
+    API_HOST = st.secrets["RAPID_API_HOST"]
+except:
+    st.error("Chybí API klíč v Secrets!")
+    st.stop()
+
+# ID sportů pro Bet365 API
+SPORTS = {
+    "⚽ Fotbal": "1",
+    "🏒 Hokej": "17", 
+    "🎾 Tenis": "13"
+}
+
+@st.cache_data(ttl=600) # Cache 10 minut (kurzy se mění)
+def get_bet365_fixtures(sport_id):
+    url = f"https://{API_HOST}/events/upcoming"
+    
+    querystring = {
+        "sport_id": sport_id,
+        "page": "1" 
+    }
+    
+    headers = {
+        "X-RapidAPI-Key": API_KEY,
+        "X-RapidAPI-Host": API_HOST
+    }
+    
     try:
-        return requests.get(proxy_url, headers={"User-Agent": "Mozilla/5.0"})
+        response = requests.get(url, headers=headers, params=querystring)
+        if response.status_code != 200:
+            return None, f"Chyba API: {response.status_code}"
+        return response.json(), None
+    except Exception as e:
+        return None, str(e)
+
+# --- POMOCNÁ FUNKCE PRO FOTBALOVOU MATEMATIKU (ClubElo) ---
+@st.cache_data(ttl=3600)
+def get_elo_data():
+    try:
+        url = "http://api.clubelo.com/" + datetime.now().strftime("%Y-%m-%d")
+        s = requests.get(url).content
+        return pd.read_csv(io.StringIO(s.decode('utf-8')))
     except: return None
 
-def poisson_calc(home_xg, away_xg):
-    max_g = 8
-    matrix = np.zeros((max_g, max_g))
-    for i in range(max_g):
-        for j in range(max_g):
-            matrix[i, j] = poisson.pmf(i, home_xg) * poisson.pmf(j, away_xg)
+def calculate_fair_odds(elo_h, elo_a):
+    elo_diff = elo_h - elo_a + 100
+    prob_h = 1 / (10**(-elo_diff/400) + 1)
+    prob_a = 1 - prob_h
+    prob_d = 0.25 # Zjednodušená remíza
     
-    prob_h = np.sum(np.tril(matrix, -1))
-    prob_d = np.sum(np.diag(matrix))
-    prob_a = np.sum(np.triu(matrix, 1))
-    return prob_h, prob_d, prob_a
+    real_h = prob_h * (1 - prob_d)
+    real_a = prob_a * (1 - prob_d)
+    
+    return 1/real_h, 1/prob_d, 1/real_a
 
-# ==============================================================================\n# 1. FOTBALOVÝ MODEL (ClubElo)\n# ==============================================================================\n
-@st.cache_data(ttl=3600)
-def get_football_opportunities():
-    # Stáhneme data
-    try:
-        url = "http://api.clubelo.com/Fixtures"
-        s = requests.get(url).content
-        df = pd.read_csv(io.StringIO(s.decode('utf-8')))
-        df['DateObj'] = pd.to_datetime(df['Date'])
-    except: return []
-
-    # Filtr na 3 dny
-    dnes = datetime.now()
-    limit = dnes + timedelta(days=3)
-    mask = (df['DateObj'] >= dnes) & (df['DateObj'] <= limit)
-    upcoming = df[mask].copy()
+# ==============================================================================\n# 2. ZPRACOVÁNÍ DAT\n# ==============================================================================\n
+def process_matches(json_data, sport_name, elo_df=None):
+    matches = []
     
-    opportunities = []
-    
-    for idx, row in upcoming.iterrows():
+    if "results" not in json_data:
+        return []
+        
+    for item in json_data["results"]:
         try:
-            elo_h = row['EloHome']
-            elo_a = row['EloAway']
+            # Základní info
+            league = item.get("league", {}).get("name", "Unknown")
+            home = item.get("home", {}).get("name", "Unknown")
+            away = item.get("away", {}).get("name", "Unknown")
+            time_stamp = int(item.get("time", 0))
+            date_obj = datetime.fromtimestamp(time_stamp)
             
-            # Výpočet xG z Elo
-            elo_diff = elo_h - elo_a + 100
-            xg_h = max(0.2, 1.35 + (elo_diff/500))
-            xg_a = max(0.2, 1.35 - (elo_diff/500))
+            # Kurzy (Main market: 1X2 nebo Moneyline)
+            odds = item.get("main_odds", {})
+            o1 = odds.get("home_od")
+            oX = odds.get("draw_od")
+            o2 = odds.get("away_od")
             
-            ph, pd_raw, pa = poisson_calc(xg_h, xg_a)
+            # Převod na float
+            try: o1 = float(o1) if o1 else 0
+            except: o1 = 0
+            try: oX = float(oX) if oX else 0
+            except: oX = 0
+            try: o2 = float(o2) if o2 else 0
+            except: o2 = 0
             
-            # Hledáme favorita
-            if ph > 0.55:
-                opportunities.append({
-                    "Sport": "⚽ Fotbal",
-                    "Liga": row['Country'],
-                    "Čas": row['DateObj'].strftime("%d.%m. %H:%M"),
-                    "Zápas": f"{row['Home']} vs {row['Away']}",
-                    "Tip": "1 (Domácí)",
-                    "Pravděpodobnost": ph,
-                    "Férový Kurz": 1/ph
-                })
-            elif pa > 0.55:
-                opportunities.append({
-                    "Sport": "⚽ Fotbal",
-                    "Liga": row['Country'],
-                    "Čas": row['DateObj'].strftime("%d.%m. %H:%M"),
-                    "Zápas": f"{row['Home']} vs {row['Away']}",
-                    "Tip": "2 (Hosté)",
-                    "Pravděpodobnost": pa,
-                    "Férový Kurz": 1/pa
-                })
-        except: continue
-        
-    return opportunities
-
-# ==============================================================================\n# 2. HOKEJOVÝ MODEL (NHL API)\n# ==============================================================================\n
-@st.cache_data(ttl=3600)
-def get_nhl_opportunities():
-    try:
-        # Statistiky
-        r_stats = requests.get("https://api-web.nhle.com/v1/standings/now").json()
-        team_stats = {}
-        for t in r_stats['standings']:
-            abbr = t['teamAbbrev']['default']
-            gp = t['gamesPlayed']
-            if gp > 0:
-                team_stats[abbr] = {
-                    "GF": t['goalFor']/gp,
-                    "GA": t['goalAgainst']/gp
-                }
-        
-        # Rozpis
-        today = datetime.now().strftime("%Y-%m-%d")
-        r_sch = requests.get(f"https://api-web.nhle.com/v1/schedule/{today}").json()
-        
-        opportunities = []
-        avg_gf = 3.0 # Průměr ligy
-        
-        for day in r_sch['gameWeek']:
-            for game in day['games']:
-                h = game['homeTeam']['abbrev']
-                a = game['awayTeam']['abbrev']
+            match_data = {
+                "Liga": league,
+                "Čas": date_obj.strftime("%d.%m. %H:%M"),
+                "Zápas": f"{home} vs {away}",
+                "1": o1,
+                "X": oX,
+                "2": o2,
+                "Value": 0, # Default
+                "Tip": ""
+            }
+            
+            # --- POKUS O VALUE BETTING (JEN FOTBAL) ---
+            if sport_name == "⚽ Fotbal" and elo_df is not None and o1 > 0 and o2 > 0:
+                # Normalizace jmen pro ClubElo
+                def clean(n): return n.replace(" FC", "").replace("FC ", "").strip()
                 
-                if h in team_stats and a in team_stats:
-                    # xG Model
-                    xg_h = (team_stats[h]['GF'] * team_stats[a]['GA']) / avg_gf
-                    xg_a = (team_stats[a]['GF'] * team_stats[h]['GA']) / avg_gf
+                h_row = elo_df[elo_df['Club'].str.contains(clean(home), case=False, na=False)]
+                a_row = elo_df[elo_df['Club'].str.contains(clean(away), case=False, na=False)]
+                
+                if not h_row.empty and not a_row.empty:
+                    elo_h = h_row.iloc[0]['Elo']
+                    elo_a = a_row.iloc[0]['Elo']
                     
-                    ph, pd_raw, pa = poisson_calc(xg_h, xg_a)
+                    fair_1, fair_X, fair_2 = calculate_fair_odds(elo_h, elo_a)
                     
-                    # Moneyline (Vítěz do rozhodnutí)
-                    ph_ml = ph + (pd_raw * 0.5)
-                    pa_ml = pa + (pd_raw * 0.5)
-                    
-                    if ph_ml > 0.58:
-                        opportunities.append({
-                            "Sport": "🏒 NHL",
-                            "Liga": "USA",
-                            "Čas": day['date'],
-                            "Zápas": f"{h} vs {a}",
-                            "Tip": "Vítěz D (ML)",
-                            "Pravděpodobnost": ph_ml,
-                            "Férový Kurz": 1/ph_ml
-                        })
-                    elif pa_ml > 0.58:
-                        opportunities.append({
-                            "Sport": "🏒 NHL",
-                            "Liga": "USA",
-                            "Čas": day['date'],
-                            "Zápas": f"{h} vs {a}",
-                            "Tip": "Vítěz H (ML)",
-                            "Pravděpodobnost": pa_ml,
-                            "Férový Kurz": 1/pa_ml
-                        })
-        return opportunities
-    except: return []
-
-# ==============================================================================\n# 3. EVROPSKÝ HOKEJ (VitiSport Scraper)\n# ==============================================================================\n
-@st.cache_data(ttl=3600)
-def get_euro_hockey_opportunities():
-    # Stáhneme hokejovou sekci VitiSportu
-    url = "https://www.vitisport.cz/index.php?g=hokej&lang=en"
-    r = get_html_via_proxy(url)
-    
-    if not r or r.status_code != 200: return []
-    
-    opportunities = []
-    try:
-        dfs = pd.read_html(r.text)
-        main_df = max(dfs, key=len).astype(str)
-        
-        current_league = "Evropa"
-        
-        for idx, row in main_df.iterrows():
-            col0 = str(row.iloc[0])
-            col1 = str(row.iloc[1])
+                    # Výpočet hodnoty (ROI)
+                    if o1 > fair_1:
+                        match_data["Value"] = (o1 / fair_1 - 1) * 100
+                        match_data["Tip"] = f"1 (Fair: {fair_1:.2f})"
+                    elif o2 > fair_2:
+                        match_data["Value"] = (o2 / fair_2 - 1) * 100
+                        match_data["Tip"] = f"2 (Fair: {fair_2:.2f})"
             
-            # Detekce ligy
-            if len(col0) > 2 and ("nan" in col1.lower() or col1 == col0):
-                current_league = col0
-                continue
-                
-            # Detekce zápasu
-            if ":" in col0 and len(row) > 5:
-                # VitiSport má sloupce s pravděpodobností (často index 5, 6, 7 nebo podobně)
-                # Zkusíme najít tip
-                tip = None
-                prob = 0.0
-                
-                # Hledáme buňku, která obsahuje "1", "2" a není to skóre
-                row_vals = row.values.tolist()
-                
-                # Jednoduchá heuristika: Pokud VitiSport dává tip, věříme mu
-                # Hledáme sloupec s tipem
-                found_tip = False
-                for val in row_vals:
-                    if val in ["1", "2"]:
-                        tip = val
-                        found_tip = True
-                        break
-                
-                if found_tip:
-                    # Odhadneme pravděpodobnost (VitiSport tipuje obvykle nad 50%)
-                    # Pro účely OddsBlaze modelu dáme konzervativní odhad
-                    prob = 0.55 
-                    
-                    opportunities.append({
-                        "Sport": "🏒 Hokej",
-                        "Liga": current_league,
-                        "Čas": col0,
-                        "Zápas": f"{row.iloc[1]} vs {row.iloc[2]}",
-                        "Tip": f"Výhra {tip}",
-                        "Pravděpodobnost": prob,
-                        "Férový Kurz": 1.80 # Odhad pro VitiSport tipy
-                    })
-    except: pass
-    
-    return opportunities
-
-# ==============================================================================\n# UI APLIKACE (OddsBlaze Style)\n# ==============================================================================\n
-st.title("🔥 OddsBlaze Replica (EV Scanner)")
-st.markdown("""
-**Jak to funguje:** Tento nástroj skenuje fotbalové a hokejové ligy a hledá zápasy, kde má jeden tým statistickou převahu.
-**Cíl:** Najít sázku, kde je kurz sázkovky vyšší než náš "Target Kurz".
-""")
-
-# 1. Sběr dat
-with st.spinner("Skenuji trhy (Fotbal, NHL, Evropský Hokej)..."):
-    opps_football = get_football_opportunities()
-    opps_nhl = get_nhl_opportunities()
-    opps_euro = get_euro_hockey_opportunities()
-    
-    all_opps = opps_football + opps_nhl + opps_euro
-
-# 2. Zpracování do DataFrame
-if all_opps:
-    df = pd.DataFrame(all_opps)
-    
-    # Přidáme sloupec "Target Kurz" (Férový kurz + 5% marže pro jistotu)
-    df["Target Kurz"] = df["Férový Kurz"] * 1.05
-    
-    # Seřadíme podle pravděpodobnosti (Důvěry)
-    df = df.sort_values(by="Pravděpodobnost", ascending=False)
-    
-    # --- FILTRY ---
-    col_f1, col_f2 = st.columns(2)
-    with col_f1:
-        sport_filter = st.multiselect("Filtrovat Sport:", df["Sport"].unique(), default=df["Sport"].unique())
-    with col_f2:
-        min_prob = st.slider("Minimální pravděpodobnost (%):", 50, 90, 60)
-        
-    # Aplikace filtrů
-    df_filtered = df[
-        (df["Sport"].isin(sport_filter)) & 
-        (df["Pravděpodobnost"] * 100 >= min_prob)
-    ].copy()
-    
-    # Formátování pro zobrazení
-    st.subheader(f"Nalezeno {len(df_filtered)} hodnotných příležitostí")
-    
-    # Vytvoříme hezkou tabulku
-    for index, row in df_filtered.iterrows():
-        prob_perc = int(row['Pravděpodobnost'] * 100)
-        fair_odd = row['Férový Kurz']
-        target_odd = row['Target Kurz']
-        
-        # Barva podle síly signálu
-        border_color = "green" if prob_perc > 70 else "orange"
-        
-        with st.container():
-            c1, c2, c3, c4, c5 = st.columns([1, 2, 2, 2, 2])
+            matches.append(match_data)
             
-            with c1:
-                st.write(f"**{row['Sport']}**")
-                st.caption(row['Liga'])
-                
-            with c2:
-                st.write(f"**{row['Čas']}**")
-                st.write(row['Zápas'])
-                
-            with c3:
-                st.metric("Náš Tip", row['Tip'])
-                
-            with c4:
-                st.metric("Pravděpodobnost", f"{prob_perc}%")
-                
-            with c5:
-                st.metric("Target Kurz", f"{target_odd:.2f}", help="Vsaď, pokud je kurz sázkovky vyšší než toto číslo.")
-                
-            st.markdown("---")
+        except Exception as e:
+            continue
+            
+    return matches
 
-else:
-    st.warning("Nebyly nalezeny žádné příležitosti. Zkus to později.")
+# ==============================================================================\n# 3. UI APLIKACE\n# ==============================================================================\n
+st.title("🏆 Bet365 Odds Scanner")
+st.caption("Data přímo z Bet365 přes RapidAPI")
 
-# --- VYSVĚTLIVKY ---
-with st.expander("ℹ️ Jak číst tuto tabulku (OddsBlaze Metodika)"):
-    st.write("""
-    1.  **Pravděpodobnost:** Jak moc si je náš model jistý výsledkem.
-    2.  **Target Kurz:** Toto je klíčová hodnota. Je to náš férový kurz navýšený o malou rezervu (5%).
-    3.  **Strategie:** Otevři si svou sázkovku (Fortuna, Tipsport). Podívej se na kurz pro daný tip.
-        *   Pokud je kurz sázkovky **VYŠŠÍ** než Target Kurz -> **VSADIT (Value Bet)**.
-        *   Pokud je kurz sázkovky **NIŽŠÍ** -> **NEVSÁZET**.
-    """)
+# Sidebar
+selected_sport = st.sidebar.radio("Vyber sport:", list(SPORTS.keys()))
+sport_id = SPORTS[selected_sport]
+
+# Načtení dat
+with st.spinner(f"Stahuji kurzy pro {selected_sport}..."):
+    data, error = get_bet365_fixtures(sport_id)
+    
+    # Pro fotbal načteme i Elo
+    elo_df = None
+    if selected_sport == "⚽ Fotbal":
+        elo_df = get_elo_data()
+
+if error:
+    st.error(error)
+    st.write("Možné příčiny:")
+    st.write("1. Vyčerpaný limit na RapidAPI (zkontroluj dashboard).")
+    st.write("2. Špatný klíč v Secrets.")
+elif data:
+    matches = process_matches(data, selected_sport, elo_df)
+    
+    if not matches:
+        st.warning("API vrátilo prázdný seznam zápasů.")
+    else:
+        df = pd.DataFrame(matches)
+        
+        # Filtry
+        ligy = sorted(df["Liga"].unique())
+        selected_league = st.sidebar.selectbox("Filtrovat ligu:", ["Vše"] + ligy)
+        
+        if selected_league != "Vše":
+            df = df[df["Liga"] == selected_league]
+            
+        # Zobrazení
+        st.subheader(f"Nalezeno {len(df)} zápasů")
+        
+        # Pokud je to fotbal, seřadíme podle Value
+        if selected_sport == "⚽ Fotbal":
+            df = df.sort_values(by="Value", ascending=False)
+        
+        for index, row in df.iterrows():
+            with st.container():
+                c1, c2, c3, c4, c5 = st.columns([2, 3, 1, 1, 1])
+                
+                with c1:
+                    st.caption(row["Liga"])
+                    st.write(f"**{row['Čas']}**")
+                    
+                with c2:
+                    st.write(f"**{row['Zápas']}**")
+                    if row["Value"] > 5:
+                        st.success(f"🔥 VALUE BET: {row['Tip']} (+{row['Value']:.1f}%)")
+                
+                with c3:
+                    st.metric("1", f"{row['1']:.2f}")
+                with c4:
+                    st.metric("X", f"{row['X']:.2f}")
+                with c5:
+                    st.metric("2", f"{row['2']:.2f}")
+                
+                st.markdown("---")
