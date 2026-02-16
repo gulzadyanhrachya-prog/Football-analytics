@@ -7,7 +7,11 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Pro Football Analyst v48", layout="wide")
 
-# ==============================================================================\n# 1. KONFIGURACE LIG (Football-Data.org)\n# ==============================================================================\n# Free Tier zahrnuje tyto ligy:\nLEAGUES = {
+# ==============================================================================
+# 1. KONFIGURACE LIG (Football-Data.org)
+# ==============================================================================
+# Free Tier zahrnuje tyto ligy:
+LEAGUES = {
     "🇬🇧 Premier League": "PL",
     "🇬🇧 Championship": "ELC",
     "🇪🇺 Liga Mistrů": "CL",
@@ -20,7 +24,10 @@ st.set_page_config(page_title="Pro Football Analyst v48", layout="wide")
     "🇧🇷 Série A (Brazílie)": "BSA"
 }
 
-# ==============================================================================\n# 2. API FUNKCE\n# ==============================================================================\n
+# ==============================================================================
+# 2. API FUNKCE
+# ==============================================================================
+
 def get_headers(api_key):
     return {'X-Auth-Token': api_key}
 
@@ -48,7 +55,10 @@ def get_matches(api_key, code):
         return data['matches']
     except: return None
 
-# ==============================================================================\n# 3. MATEMATICKÝ MODEL (POISSON & xG)\n# ==============================================================================\n
+# ==============================================================================
+# 3. MATEMATICKÝ MODEL (POISSON & xG)
+# ==============================================================================
+
 def calculate_team_stats(standings):
     if not standings: return None, 0
     
@@ -127,7 +137,10 @@ def predict_match(home_id, away_id, stats, league_avg):
         "Form_H": h["form"], "Form_A": a["form"]
     }
 
-# ==============================================================================\n# 4. UI APLIKACE\n# ==============================================================================\n
+# ==============================================================================
+# 4. UI APLIKACE
+# ==============================================================================
+
 st.title("🧠 Pro Football Analyst (Stable)")
 st.caption("Oficiální data + Poissonův model. Žádné výpadky.")
 
