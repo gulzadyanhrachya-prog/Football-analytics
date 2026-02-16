@@ -1,6 +1,9 @@
 streamlit
 pandas
 requests
+lxml
+cloudscraper
 scipy
 matplotlib
 seaborn
+PyYAML
