@@ -1,43 +1,63 @@
-import streamlit as st
+).import streamlit as st
 import pandas as pd
-import cloudscraper
+import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
+import urllib.parse
+import time
+import random
 
-st.set_page_config(page_title="PredictZ Cleaner", layout="wide")
+st.set_page_config(page_title="PredictZ Proxy Hunter", layout="wide")
 
-# ==============================================================================\n# 1. ROBUSTNÍ SCRAPER (PredictZ)\n# ==============================================================================\n
+# ==============================================================================\n# 1. SCRAPING ENGINE (PŘES PROXY)\n# ==============================================================================\n
 @st.cache_data(ttl=1800)
-def scrape_predictz_robust(day="today"):
+def scrape_predictz_proxy(day="today"):
+    # 1. Cílová adresa
     base_url = "https://www.predictz.com/predictions/"
     if day == "tomorrow":
         base_url += "tomorrow/"
     
-    scraper = cloudscraper.create_scraper()
+    # 2. Zakódování adresy pro proxy
+    encoded_url = urllib.parse.quote(base_url)
+    
+    # 3. Náhodné číslo, aby se neukládala stará cache na straně proxy
+    rand_num = random.randint(1, 10000)
+    
+    # 4. Použití AllOrigins (Stáhne stránku za nás)
+    proxy_url = f"https://api.allorigins.win/get?url={encoded_url}&rand={rand_num}"
     
     try:
-        r = scraper.get(base_url)
-        if r.status_code != 200: return None, f"Chyba připojení: {r.status_code}"
+        # Stahujeme JSON, který obsahuje HTML stránky v poli "contents"
+        r = requests.get(proxy_url, timeout=20)
         
-        soup = BeautifulSoup(r.text, 'html.parser')
+        if r.status_code != 200:
+            return None, f"Chyba proxy: {r.status_code}"
+            
+        data = r.json()
+        html_content = data.get("contents")
+        
+        if not html_content:
+            return None, "Proxy vrátila prázdný obsah."
+            
+        # --- PARSOVÁNÍ HTML ---
+        soup = BeautifulSoup(html_content, 'html.parser')
         matches = []
         
-        # PredictZ má zápasy v blocích. Musíme najít kontejnery.
-        # Hledáme všechny řádky s třídou "ptable-row"
+        # Hledáme řádky zápasů
         rows = soup.find_all("div", class_="ptable-row")
         
         current_league = "Ostatní"
         
         for row in rows:
             try:
-                # 1. Zkusíme najít jména týmů
+                # Hledáme jména týmů
                 home_div = row.find("div", class_="ptable-home")
                 away_div = row.find("div", class_="ptable-away")
                 
-                # Pokud řádek nemá týmy, může to být hlavička ligy
+                # Pokud řádek nemá týmy, je to pravděpodobně název ligy
                 if not home_div or not away_div:
-                    # Zkusíme zjistit, jestli to není název ligy
                     text = row.get_text(strip=True)
+                    # Jednoduchá detekce: pokud text neobsahuje čísla a je delší
                     if len(text) > 3 and not any(char.isdigit() for char in text):
                         current_league = text
                     continue
@@ -45,14 +65,13 @@ def scrape_predictz_robust(day="today"):
                 home = home_div.get_text(strip=True)
                 away = away_div.get_text(strip=True)
                 
-                # Ochrana proti prázdným názvům
                 if not home or not away: continue
 
-                # 2. Zkusíme najít předpovídané skóre
+                # Hledáme předpovídané skóre
                 score_div = row.find("div", class_="ptable-score")
                 pred_score = score_div.get_text(strip=True) if score_div else ""
                 
-                # 3. Vypočítáme TIP z předpovídaného skóre (Spolehlivější než číst text)
+                # Vypočítáme TIP ze skóre (nejspolehlivější metoda)
                 tip = "Neznámý"
                 tip_code = ""
                 
@@ -71,10 +90,9 @@ def scrape_predictz_robust(day="today"):
                         else: 
                             tip = "Remíza"
                             tip_code = "0"
-                    except:
-                        pass # Pokud skóre není čitelné (např. "?-?")
+                    except: pass
                 
-                # Pokud se nepodařilo určit tip ze skóre, zkusíme textový tip
+                # Pokud nemáme tip ze skóre, zkusíme textový tip
                 if tip_code == "":
                     result_div = row.find("div", class_="ptable-result")
                     if result_div:
@@ -83,7 +101,6 @@ def scrape_predictz_robust(day="today"):
                         elif "away" in res_text: tip_code = "2"; tip = f"Výhra {away}"
                         elif "draw" in res_text: tip_code = "0"; tip = "Remíza"
 
-                # Pokud stále nemáme tip, přeskočíme (nechceme zobrazovat "nan")
                 if tip_code == "": continue
 
                 matches.append({
@@ -103,35 +120,38 @@ def scrape_predictz_robust(day="today"):
         return None, str(e)
 
 # ==============================================================================\n# 2. UI APLIKACE\n# ==============================================================================\n
-st.title("⚽ Fotbalový Přehled (PredictZ)")
-st.caption("Čistá data, žádné chyby, seskupeno podle lig.")
+st.title("🌍 Global Football Predictor")
+st.caption("Zdroj: PredictZ (přes Proxy Tunel)")
 
 # Výběr dne
-day_sel = st.radio("Vyber den:", ["Dnes", "Zítra"], horizontal=True)
-day_param = "today" if day_sel == "Dnes" else "tomorrow"
+col_day, col_status = st.columns([1, 3])
+with col_day:
+    day_sel = st.radio("Vyber den:", ["Dnes", "Zítra"])
+    day_param = "today" if day_sel == "Dnes" else "tomorrow"
 
-with st.spinner("Stahuji a čistím data..."):
-    data, error = scrape_predictz_robust(day_param)
+with st.spinner(f"Stahuji data přes proxy server ({day_sel})..."):
+    data, error = scrape_predictz_proxy(day_param)
 
 if error:
-    st.error(f"Chyba: {error}")
+    st.error(f"Chyba připojení: {error}")
+    st.write("Zkus to znovu za chvíli. Proxy server může být přetížený.")
 elif not data:
-    st.warning("Nebyly nalezeny žádné zápasy.")
+    st.warning("Nebyly nalezeny žádné zápasy. Web PredictZ může být nedostupný.")
 else:
     df = pd.DataFrame(data)
     
     # --- FILTRY ---
-    col_search, col_tip = st.columns(2)
-    with col_search:
-        search = st.text_input("Hledat tým nebo ligu:")
-    with col_tip:
-        filter_tip = st.multiselect("Filtrovat tip:", ["Výhra Domácích (1)", "Remíza (0)", "Výhra Hostů (2)"], default=["Výhra Domácích (1)", "Výhra Hostů (2)"])
+    with st.expander("🛠️ Filtrování", expanded=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            search = st.text_input("Hledat tým nebo ligu (např. Arsenal, Bosnia):")
+        with c2:
+            filter_tip = st.multiselect("Typ sázky:", ["Výhra Domácích (1)", "Remíza (0)", "Výhra Hostů (2)"], default=["Výhra Domácích (1)", "Výhra Hostů (2)"])
     
     # Aplikace filtrů
     if search:
         df = df[df["Liga"].str.contains(search, case=False) | df["Domácí"].str.contains(search, case=False) | df["Hosté"].str.contains(search, case=False)]
     
-    # Filtr podle typu sázky
     codes_allowed = []
     if "Výhra Domácích (1)" in filter_tip: codes_allowed.append("1")
     if "Remíza (0)" in filter_tip: codes_allowed.append("0")
@@ -139,18 +159,16 @@ else:
     
     df = df[df["Kód"].isin(codes_allowed)]
     
-    # --- ZOBRAZENÍ PODLE LIG ---
-    # Získáme unikátní ligy
+    # --- ZOBRAZENÍ ---
+    st.success(f"Zobrazeno {len(df)} zápasů.")
+    
+    # Seskupení podle lig
     ligy = df["Liga"].unique()
     
-    st.success(f"Zobrazeno {len(df)} zápasů v {len(ligy)} ligách.")
-    
     for liga in ligy:
-        # Zápasy v dané lize
         league_matches = df[df["Liga"] == liga]
         
-        # Vytvoříme kontejner pro ligu
-        with st.expander(f"🏆 {liga} ({len(league_matches)} zápasů)", expanded=True):
+        with st.expander(f"🏆 {liga} ({len(league_matches)})", expanded=True):
             for idx, row in league_matches.iterrows():
                 c1, c2, c3, c4 = st.columns([3, 1, 3, 2])
                 
@@ -158,12 +176,11 @@ else:
                     st.markdown(f"<div style='text-align:right; font-weight:bold'>{row['Domácí']}</div>", unsafe_allow_html=True)
                 
                 with c2:
-                    st.markdown(f"<div style='text-align:center; background-color:#f0f2f6; border-radius:5px'>{row['Skóre']}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='text-align:center; background-color:#f0f2f6; border-radius:5px; font-weight:bold'>{row['Skóre']}</div>", unsafe_allow_html=True)
                 
                 with c3:
                     st.markdown(f"<div style='text-align:left; font-weight:bold'>{row['Hosté']}</div>", unsafe_allow_html=True)
                 
                 with c4:
-                    # Barva tipu
                     color = "green" if row["Kód"] == "1" else ("red" if row["Kód"] == "2" else "orange")
                     st.markdown(f":{color}[**{row['Tip']}**]")
