@@ -1,4 +1,4 @@
-rowse files". Nahraj tam ten stažený soubor.import streamlit as st
+import streamlit as st
 import json
 import yaml # Pro jistotu, kdyby to bylo YAML
 
