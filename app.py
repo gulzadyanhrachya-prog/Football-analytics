@@ -4,15 +4,40 @@ import numpy as np
 from scipy.stats import poisson
 import matplotlib.pyplot as plt
 import seaborn as sns
-from datetime import datetime, timedelta
-import io
 
-st.set_page_config(page_title="Betting Auto-Pilot v31", layout="wide")
+st.set_page_config(page_title="Betting Auto-Pilot v33 (Offline)", layout="wide")
 
-# ==============================================================================\n# 1. MATEMATICKÉ MODELY (Jádro)\n# ==============================================================================\n
+# ==============================================================================\n# 1. VESTAVĚNÁ DATABÁZE TÝMŮ (Elo Ratingy - Odhad 2025)\n# ==============================================================================\n
+TEAMS_DB = {
+    "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Manchester City": 2050, "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Liverpool": 2000, "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Arsenal": 1980,
+    "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Chelsea": 1850, "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Man Utd": 1820, "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Tottenham": 1830,
+    "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Aston Villa": 1800, "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Newcastle": 1780, "🏴󠁧󠁢󠁥󠁮󠁧󠁿 West Ham": 1750,
+    
+    "🇪🇸 Real Madrid": 1990, "🇪🇸 Barcelona": 1950, "🇪🇸 Atletico Madrid": 1880,
+    "🇪🇸 Girona": 1790, "🇪🇸 Real Sociedad": 1780, "🇪🇸 Bilbao": 1770,
+    
+    "🇩🇪 Bayern Munich": 1960, "🇩🇪 Leverkusen": 1920, "🇩🇪 Dortmund": 1850,
+    "🇩🇪 RB Leipzig": 1840, "🇩🇪 Stuttgart": 1780,
+    
+    "🇮🇹 Inter Milan": 1940, "🇮🇹 Juventus": 1860, "🇮🇹 AC Milan": 1850,
+    "🇮🇹 Atalanta": 1840, "🇮🇹 Napoli": 1820, "🇮🇹 Roma": 1790,
+    
+    "🇫🇷 PSG": 1880, "🇫🇷 Monaco": 1780, "🇫🇷 Lille": 1760,
+    
+    "🇵🇹 Benfica": 1810, "🇵🇹 Porto": 1800, "🇵🇹 Sporting": 1790,
+    "🇳🇱 PSV": 1800, "🇳🇱 Feyenoord": 1780, "🇳🇱 Ajax": 1750,
+    
+    "🇨🇿 Sparta Praha": 1680, "🇨🇿 Slavia Praha": 1690, "🇨🇿 Plzeň": 1620,
+    "🇨🇿 Baník Ostrava": 1500,
+    
+    "🇹🇷 Galatasaray": 1700, "🇹🇷 Fenerbahce": 1710,
+    "🇬🇷 Olympiacos": 1650, "🇬🇷 PAOK": 1640
+}
+
+# ==============================================================================\n# 2. MATEMATICKÉ MODELY\n# ==============================================================================\n
 def calculate_probs(elo_h, elo_a):
     # Výhra (Elo)
-    elo_diff = elo_h - elo_a + 100 
+    elo_diff = elo_h - elo_a + 100 # Domácí výhoda
     prob_h_win = 1 / (10**(-elo_diff/400) + 1)
     prob_a_win = 1 - prob_h_win
     
@@ -56,131 +81,94 @@ def pick_best_bet(probs):
     candidates.sort(key=lambda x: x[1], reverse=True)
     return candidates[0][0], candidates[0][1]
 
-# ==============================================================================\n# 2. UI APLIKACE\n# ==============================================================================\n
-st.title("🤖 Betting Auto-Pilot (Manual Data)")
+# ==============================================================================\n# 3. UI APLIKACE\n# ==============================================================================\n
+st.title("🤖 Betting Auto-Pilot (Offline Mode)")
+st.info("ℹ️ Server ClubElo má výpadek. Aplikace běží v nezávislém režimu s interní databází.")
 
-# --- SEKCE PRO NAHRÁNÍ DAT ---
-st.info("ℹ️ Server ClubElo blokuje přímé stahování. Pro získání aktuálních dat postupuj takto:")
+tabs = st.tabs(["⚔️ Duel (Vyber týmy)", "🎲 Generátor Tipů"])
 
-col_inst, col_upload = st.columns([1, 2])
-
-with col_inst:
-    st.markdown("""
-    1. Klikni na tento odkaz: **[api.clubelo.com/Fixtures](http://api.clubelo.com/Fixtures)**
-    2. Otevře se ti stránka s textem.
-    3. Klikni pravým tlačítkem a dej **"Uložit jako..."** (ulož to jako `Fixtures.csv`).
-    4. Tento soubor nahraj vedle 👉
-    """)
-
-with col_upload:
-    uploaded_file = st.file_uploader("Nahraj soubor Fixtures.csv zde:", type=["csv", "txt"])
-
-# --- ZPRACOVÁNÍ DAT ---
-df = None
-
-if uploaded_file is not None:
-    try:
-        df = pd.read_csv(uploaded_file)
-        df['DateObj'] = pd.to_datetime(df['Date'])
-        st.success(f"✅ Úspěšně načteno {len(df)} zápasů z tvého souboru!")
-    except Exception as e:
-        st.error(f"Chyba při čtení souboru: {e}")
-else:
-    # DEMO DATA (Pokud nic nenahrál)
-    st.warning("⚠️ Zatím jsi nic nenahrál. Zobrazuji DEMO data.")
-    dnes = datetime.now()
-    data = {
-        "Date": [dnes.strftime("%Y-%m-%d")] * 5,
-        "Country": ["ENG", "ESP", "ITA", "GER", "FRA"],
-        "Home": ["Manchester City", "Real Madrid", "Inter", "Bayern", "PSG"],
-        "Away": ["Liverpool", "Barcelona", "Milan", "Dortmund", "Lyon"],
-        "EloHome": [2050, 1980, 1950, 1920, 1850],
-        "EloAway": [2000, 1970, 1940, 1880, 1800]
-    }
-    df = pd.DataFrame(data)
-    df['DateObj'] = pd.to_datetime(df['Date'])
-
-# --- VÝPOČTY A ZOBRAZENÍ ---
-if df is not None:
-    # Filtry
-    dnes = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+# --- TAB 1: DUEL ---
+with tabs[0]:
+    st.header("Analyzátor Zápasu")
     
-    # Pokud je to Demo, nefiltrujeme podle data
-    if uploaded_file is not None:
-        limit = dnes + timedelta(days=5) 
-        mask = (df['DateObj'] >= dnes) & (df['DateObj'] <= limit)
-        upcoming = df[mask].copy()
-    else:
-        upcoming = df.copy()
+    c1, c2 = st.columns(2)
+    with c1:
+        home_team = st.selectbox("Domácí tým:", list(TEAMS_DB.keys()), index=0)
+    with c2:
+        # Abychom nevybrali stejný tým, vyfiltrujeme ho
+        away_options = [t for t in TEAMS_DB.keys() if t != home_team]
+        away_team = st.selectbox("Hostující tým:", away_options, index=0)
+        
+    if st.button("Analyzovat Zápas"):
+        elo_h = TEAMS_DB[home_team]
+        elo_a = TEAMS_DB[away_team]
+        
+        stats = calculate_probs(elo_h, elo_a)
+        best_bet, conf = pick_best_bet(stats)
+        fair_odd = 1/conf
+        
+        # Výsledky
+        st.markdown("---")
+        res_c1, res_c2, res_c3 = st.columns(3)
+        
+        with res_c1:
+            st.metric("Doporučená sázka", best_bet)
+        with res_c2:
+            st.metric("Důvěra modelu", f"{conf*100:.1f} %")
+        with res_c3:
+            st.metric("Férový kurz", f"{fair_odd:.2f}")
+            
+        # Detaily
+        with st.expander("📊 Zobrazit detailní pravděpodobnosti", expanded=True):
+            d1, d2 = st.columns(2)
+            with d1:
+                st.write("**Hlavní trhy:**")
+                st.write(f"Výhra Domácí: {stats['1']*100:.1f}% (Kurz {1/stats['1']:.2f})")
+                st.write(f"Remíza: {stats['0']*100:.1f}% (Kurz {1/stats['0']:.2f})")
+                st.write(f"Výhra Hosté: {stats['2']*100:.1f}% (Kurz {1/stats['2']:.2f})")
+            with d2:
+                st.write("**Góly:**")
+                st.write(f"Over 2.5: {stats['Over 2.5']*100:.1f}%")
+                st.write(f"BTTS (Oba dají gól): {stats['BTTS Yes']*100:.1f}%")
+                st.write(f"xG: {stats['xG_Home']:.2f} vs {stats['xG_Away']:.2f}")
+                
+        # Graf
+        fig, ax = plt.subplots(figsize=(6, 3))
+        sns.heatmap(stats['Matrix'], annot=True, fmt=".1%", cmap="YlGnBu", ax=ax)
+        ax.set_title("Pravděpodobnost přesného skóre")
+        ax.set_xlabel(away_team)
+        ax.set_ylabel(home_team)
+        st.pyplot(fig)
+
+# --- TAB 2: GENERÁTOR ---
+with tabs[1]:
+    st.header("Generátor Sázkového Tiketu")
+    st.write("Tato funkce náhodně vylosuje 10 zápasů z databáze a najde nejlepší sázky.")
     
-    if upcoming.empty:
-        st.warning("V nahraném souboru nejsou žádné zápasy pro nadcházející dny.")
-    else:
+    if st.button("🎲 Vygenerovat Tiket"):
+        import random
+        teams_list = list(TEAMS_DB.keys())
         results = []
         
-        for i, (idx, row) in enumerate(upcoming.iterrows()):
-            try:
-                home, away = row['Home'], row['Away']
-                elo_h = row.get('EloHome')
-                elo_a = row.get('EloAway')
-                
-                if pd.isna(elo_h) or pd.isna(elo_a): continue
-
-                probs = calculate_probs(elo_h, elo_a)
-                bet_name, confidence = pick_best_bet(probs)
-                fair_odd = 1 / confidence if confidence > 0 else 0
-                
-                results.append({
-                    "Datum": row['DateObj'].strftime("%d.%m."),
-                    "Soutěž": row.get('Country', 'EU'),
-                    "Zápas": f"{home} vs {away}",
-                    "DOPORUČENÁ SÁZKA": bet_name,
-                    "Důvěra": confidence * 100,
-                    "Férový kurz": fair_odd,
-                    "Stats": probs,
-                    "Domácí": home, "Hosté": away
-                })
-            except: continue
-        
-        df_res = pd.DataFrame(results)
-        
-        if not df_res.empty:
-            # TABS
-            tab1, tab2 = st.tabs(["📋 Seznam Tipů", "🔬 Detailní Analyzátor"])
+        for _ in range(10):
+            h = random.choice(teams_list)
+            a = random.choice(teams_list)
+            if h == a: continue
             
-            with tab1:
-                st.subheader("🔥 TOP TIPY (Seřazeno podle důvěry)")
-                df_show = df_res.sort_values(by="Důvěra", ascending=False)
-                
-                for idx, match in df_show.iterrows():
-                    with st.container():
-                        c1, c2, c3, c4 = st.columns([1, 3, 2, 1])
-                        with c1: st.write(f"**{match['Datum']}**"); st.caption(match['Soutěž'])
-                        with c2: st.write(f"**{match['Zápas']}**")
-                        with c3: 
-                            st.write(f"**{match['DOPORUČENÁ SÁZKA']}**")
-                            st.progress(match['Důvěra']/100)
-                        with c4: st.metric("Kurz", f"{match['Férový kurz']:.2f}")
-                        st.markdown("---")
-
-            with tab2:
-                st.subheader("🔬 Laboratoř")
-                selected_match = st.selectbox("Vyber zápas:", df_res['Zápas'].unique())
-                match_data = df_res[df_res['Zápas'] == selected_match].iloc[0]
-                stats = match_data['Stats']
-                
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.metric(f"xG {match_data['Domácí']}", f"{stats['xG_Home']:.2f}")
-                    st.metric(f"xG {match_data['Hosté']}", f"{stats['xG_Away']:.2f}")
-                with c2:
-                    st.write("Pravděpodobnosti:")
-                    st.write(f"1: {stats['1']*100:.1f}%")
-                    st.write(f"0: {stats['0']*100:.1f}%")
-                    st.write(f"2: {stats['2']*100:.1f}%")
-                
-                fig, ax = plt.subplots(figsize=(6, 4))
-                sns.heatmap(stats['Matrix'], annot=True, fmt=".1%", cmap="YlGnBu", ax=ax)
-                st.pyplot(fig)
-
-        else: st.warning("Nepodařilo se vypočítat predikce.")
+            elo_h = TEAMS_DB[h]
+            elo_a = TEAMS_DB[a]
+            
+            stats = calculate_probs(elo_h, elo_a)
+            best_bet, conf = pick_best_bet(stats)
+            
+            results.append({
+                "Zápas": f"{h} vs {a}",
+                "Tip": best_bet,
+                "Důvěra": conf * 100,
+                "Férový kurz": 1/conf
+            })
+            
+        df_res = pd.DataFrame(results).sort_values(by="Důvěra", ascending=False)
+        
+        st.subheader("🔥 TOP TIPY (Simulace)")
+        st.dataframe(df_res.style.format({"Důvěra": "{:.1f} %", "Férový kurz": "{:.2f}"}), hide_index=True, use_container_width=True)
