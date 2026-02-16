@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 # ==============================================================================
 # 1. NASTAVENÍ A STYLY
 # ==============================================================================
-st.set_page_config(page_title="Pro Football Analyst v4.0", layout="wide", page_icon="🧠")
+st.set_page_config(page_title="Pro Football Analyst v4.1", layout="wide", page_icon="🧠")
 
 st.markdown("""
 <style>
@@ -25,8 +25,7 @@ st.markdown("""
 # ==============================================================================
 # 2. KONFIGURACE LIG
 # ==============================================================================
-LEAGUES = {
-    "🇬🇧 Premier League": "PL",
+LEAGUES = {\n    "🇬🇧 Premier League": "PL",
     "🇬🇧 Championship": "ELC",
     "🇪🇺 Liga Mistrů": "CL",
     "🇩🇪 Bundesliga": "BL1",
@@ -87,7 +86,7 @@ def render_form_html(form_str):
 def calculate_team_stats(standings):
     if not standings or standings == "RESTRICTED": return None, 0
     
-    stats = {}
+    stats = {}\
     total_goals = 0
     total_games = 0
     
@@ -102,13 +101,20 @@ def calculate_team_stats(standings):
         total_goals += gf
         total_games += played
         
+        # OPRAVA CHYBY ZDE: Ošetření None hodnoty u formy a loga
+        raw_form = row.get('form')
+        safe_form = raw_form if raw_form is not None else ""
+        
+        raw_crest = row['team'].get('crest')
+        safe_crest = raw_crest if raw_crest is not None else ""
+
         stats[team_id] = {
             "name": row['team']['name'],
-            "crest": row['team'].get('crest', ''),
+            "crest": safe_crest,
             "gf_avg": gf / played,
             "ga_avg": ga / played,
             "points": row['points'],
-            "form": row.get('form', '').replace(",", "")
+            "form": safe_form.replace(",", "")
         }
         
     if total_games == 0: return None, 0
@@ -196,7 +202,7 @@ def get_fair_odd(prob):
 # 5. UI APLIKACE
 # ==============================================================================
 
-st.title("🧠 Pro Football Analyst v4.0")
+st.title("🧠 Pro Football Analyst v4.1")
 st.caption("Pokročilá analýza: Forma, Power Index a Smart Picks")
 
 # --- SIDEBAR ---
@@ -222,7 +228,7 @@ else:
     if standings == "RESTRICTED":
         st.error(f"⛔ Nemáš přístup k lize {selected_league} (Free Tier). Zkus PL, PD, SA, BL1, FL1.")
     elif standings is None or matches is None:
-        st.error("Chyba při stahování dat.")
+        st.error("Chyba při stahování dat. Zkontroluj API klíč nebo zkus jinou ligu.")
     else:
         stats_db, league_avg = calculate_team_stats(standings)
         
@@ -245,7 +251,8 @@ else:
                     # 1. HLAVIČKA S FORMOU
                     c1, c2, c3 = st.columns([1, 4, 1])
                     with c1: 
-                        st.image(pred['Home']['crest'], width=60)
+                        if pred['Home']['crest']:
+                            st.image(pred['Home']['crest'], width=60)
                         st.markdown(render_form_html(pred['Home']['form']), unsafe_allow_html=True)
                     with c2: 
                         st.markdown(f"<h3 style='text-align: center;'>{pred['Home']['name']} vs {pred['Away']['name']}</h3>", unsafe_allow_html=True)
@@ -257,7 +264,8 @@ else:
                         </div>
                         """, unsafe_allow_html=True)
                     with c3: 
-                        st.image(pred['Away']['crest'], width=60)
+                        if pred['Away']['crest']:
+                            st.image(pred['Away']['crest'], width=60)
                         st.markdown(render_form_html(pred['Away']['form']), unsafe_allow_html=True)
                     
                     st.divider()
