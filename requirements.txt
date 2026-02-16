@@ -1,6 +1,4 @@
 streamlit
 pandas
 requests
-lxml
-cloudscraper
-beautifulsoup4
+scipy
