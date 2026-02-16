@@ -1,4 +1,4 @@
-import streamlit as st
+.import streamlit as st
 import pandas as pd
 import requests
 import numpy as np
@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 # ==============================================================================
 # 1. NASTAVENÍ A STYLY
 # ==============================================================================
-st.set_page_config(page_title="Pro Football Analyst v4.1", layout="wide", page_icon="🧠")
+st.set_page_config(page_title="Pro Football Analyst v4.2", layout="wide", page_icon="🧠")
 
 st.markdown("""
 <style>
@@ -25,7 +25,8 @@ st.markdown("""
 # ==============================================================================
 # 2. KONFIGURACE LIG
 # ==============================================================================
-LEAGUES = {\n    "🇬🇧 Premier League": "PL",
+LEAGUES = {
+    "🇬🇧 Premier League": "PL",
     "🇬🇧 Championship": "ELC",
     "🇪🇺 Liga Mistrů": "CL",
     "🇩🇪 Bundesliga": "BL1",
@@ -74,7 +75,6 @@ def render_form_html(form_str):
     """Převede string 'W,L,D' na barevné HTML odznaky."""
     if not form_str: return "<span style='color:grey'>N/A</span>"
     html = ""
-    # API vrací formu jako "W,L,D" nebo "WLD". Upravíme pro jistotu.
     clean_form = form_str.replace(",", "").strip()
     # Bereme posledních 5 zápasů
     for char in clean_form[-5:]: 
@@ -86,7 +86,7 @@ def render_form_html(form_str):
 def calculate_team_stats(standings):
     if not standings or standings == "RESTRICTED": return None, 0
     
-    stats = {}\
+    stats = {}
     total_goals = 0
     total_games = 0
     
@@ -101,7 +101,7 @@ def calculate_team_stats(standings):
         total_goals += gf
         total_games += played
         
-        # OPRAVA CHYBY ZDE: Ošetření None hodnoty u formy a loga
+        # Ošetření None hodnoty u formy a loga
         raw_form = row.get('form')
         safe_form = raw_form if raw_form is not None else ""
         
@@ -167,7 +167,7 @@ def predict_match(home_id, away_id, stats, league_avg):
         smart_pick = f"Výhra {h['name']}"
         smart_conf = prob_1
         smart_color = "green"
-    elif prob_2 > 0.55: # Hosté potřebují menší práh pro hodnotu
+    elif prob_2 > 0.55:
         smart_pick = f"Výhra {a['name']}"
         smart_conf = prob_2
         smart_color = "red"
@@ -202,7 +202,7 @@ def get_fair_odd(prob):
 # 5. UI APLIKACE
 # ==============================================================================
 
-st.title("🧠 Pro Football Analyst v4.1")
+st.title("🧠 Pro Football Analyst v4.2")
 st.caption("Pokročilá analýza: Forma, Power Index a Smart Picks")
 
 # --- SIDEBAR ---
