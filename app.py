@@ -5,54 +5,39 @@ from scipy.stats import poisson
 from datetime import datetime, timedelta
 import requests
 import io
+import urllib.parse
 
-st.set_page_config(page_title="Betting Auto-Pilot v26", layout="wide")
+st.set_page_config(page_title="Betting Auto-Pilot v27", layout="wide")
 
-# ==============================================================================\n# 1. ROBUSTNÍ STAHOVÁNÍ DAT (Anti-Block)\n# ==============================================================================\n
+# ==============================================================================\n# 1. ROBUSTNÍ STAHOVÁNÍ DAT (AllOrigins Proxy)\n# ==============================================================================\n
 @st.cache_data(ttl=3600)
-def get_data_robust():
-    # Použijeme proxy a hlavičky prohlížeče
-    proxy_base = "https://corsproxy.io/?"
+def get_data_unbreakable():
+    # Cílové URL
     url_fixtures = "http://api.clubelo.com/Fixtures"
-    url_ratings = "http://api.clubelo.com/" + datetime.now().strftime("%Y-%m-%d")
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/csv,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Connection": "keep-alive"
-    }
+    # Použijeme AllOrigins JSON Proxy (nejspolehlivější)
+    # Tato služba stáhne CSV za nás a pošle nám ho jako text v JSONu
+    proxy_url = f"https://api.allorigins.win/get?url={urllib.parse.quote(url_fixtures)}"
     
     df_fix = None
-    df_elo = None
     
-    # 1. Stažení Rozpisu
     try:
-        # Zkusíme napřímo s timeoutem 30s
-        r = requests.get(url_fixtures, headers=headers, timeout=30)
-        if r.status_code == 200:
-            df_fix = pd.read_csv(io.StringIO(r.content.decode('utf-8')))
-        else:
-            # Pokud to selže, zkusíme přes proxy
-            r = requests.get(proxy_base + url_fixtures, headers=headers, timeout=30)
-            if r.status_code == 200:
-                df_fix = pd.read_csv(io.StringIO(r.content.decode('utf-8')))
-    except Exception as e:
-        st.warning(f"Chyba stahování rozpisu: {e}")
-
-    # 2. Stažení Elo Ratingů
-    try:
-        r = requests.get(url_ratings, headers=headers, timeout=30)
-        if r.status_code == 200:
-            df_elo = pd.read_csv(io.StringIO(r.content.decode('utf-8')))
-        else:
-            r = requests.get(proxy_base + url_ratings, headers=headers, timeout=30)
-            if r.status_code == 200:
-                df_elo = pd.read_csv(io.StringIO(r.content.decode('utf-8')))
-    except Exception as e:
-        st.warning(f"Chyba stahování Elo: {e}")
+        # 1. Stáhneme JSON z proxy
+        r = requests.get(proxy_url, timeout=15)
+        data = r.json()
         
-    return df_fix, df_elo
+        # 2. Vytáhneme obsah (CSV text)
+        csv_content = data.get("contents")
+        
+        if csv_content:
+            # 3. Převedeme na DataFrame
+            df_fix = pd.read_csv(io.StringIO(csv_content))
+            # Oprava data
+            df_fix['DateObj'] = pd.to_datetime(df_fix['Date'])
+    except Exception as e:
+        st.error(f"Chyba při stahování přes proxy: {e}")
+        
+    return df_fix
 
 # ==============================================================================\n# 2. MATEMATICKÉ MODELY\n# ==============================================================================\n
 def calculate_probs(elo_h, elo_a):
@@ -79,14 +64,11 @@ def calculate_probs(elo_h, elo_a):
             matrix[i, j] = poisson.pmf(i, exp_xg_h) * poisson.pmf(j, exp_xg_a)
             
     prob_over_25 = 0
+    prob_btts = 0
     for i in range(max_g):
         for j in range(max_g):
             if i + j > 2.5: prob_over_25 += matrix[i, j]
-            
-    prob_btts = 0
-    for i in range(1, max_g):
-        for j in range(1, max_g):
-            prob_btts += matrix[i, j]
+            if i > 0 and j > 0: prob_btts += matrix[i, j]
             
     return {
         "1": real_h, "0": prob_draw, "2": real_a,
@@ -108,29 +90,22 @@ def pick_best_bet(probs):
     candidates.sort(key=lambda x: x[1], reverse=True)
     best_bet = candidates[0]
     
-    if best_bet[1] < 0.50:
+    if best_bet[1] < 0.55: # Pokud je nejlepší sázka pod 55%, zkusíme neprohru
         if prob_10 > prob_02: return "Neprohra Domácích (10)", prob_10
         else: return "Neprohra Hostů (02)", prob_02
             
     return best_bet[0], best_bet[1]
 
 # ==============================================================================\n# 3. UI APLIKACE\n# ==============================================================================\n
-st.title("🤖 Betting Auto-Pilot (Anti-Block)")
+st.title("🤖 Betting Auto-Pilot (Unbreakable)")
 
 # --- FOTBAL ---
 st.header("⚽ Fotbal")
 
-with st.spinner("Stahuji data (Timeout nastaven na 30s)..."):
-    df_fix, df_elo = get_data_robust()
+with st.spinner("Stahuji data přes AllOrigins Proxy..."):
+    df_fix = get_data_unbreakable()
 
 if df_fix is not None:
-    # Zpracování data
-    try:
-        df_fix['DateObj'] = pd.to_datetime(df_fix['Date'])
-    except:
-        st.error("Chyba formátu data v souboru ClubElo.")
-        st.stop()
-
     dnes = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     limit = dnes + timedelta(days=4) 
     
@@ -140,9 +115,6 @@ if df_fix is not None:
     if upcoming.empty:
         st.warning("V nejbližších dnech nejsou v databázi žádné zápasy.")
     else:
-        elo_dict = {}
-        if df_elo is not None: elo_dict = df_elo.set_index('Club')['Elo'].to_dict()
-
         results = []
         progress_bar = st.progress(0)
         total_rows = len(upcoming)
@@ -155,12 +127,7 @@ if df_fix is not None:
                 elo_h = row.get('EloHome')
                 elo_a = row.get('EloAway')
                 
-                # Fallback na databázi
-                if (pd.isna(elo_h) or pd.isna(elo_a)) and df_elo is not None:
-                    elo_h = elo_dict.get(home)
-                    elo_a = elo_dict.get(away)
-                
-                if elo_h is None or elo_a is None: continue
+                if pd.isna(elo_h) or pd.isna(elo_a): continue
 
                 probs = calculate_probs(elo_h, elo_a)
                 bet_name, confidence = pick_best_bet(probs)
@@ -190,7 +157,7 @@ if df_fix is not None:
             st.dataframe(df_res.sort_values(by="Důvěra", ascending=False).style.format({"Důvěra": "{:.1f} %", "Férový kurz": "{:.2f}"}), hide_index=True, use_container_width=True)
         else: st.warning("Nepodařilo se vypočítat predikce.")
 else:
-    st.error("Nepodařilo se načíst data z ClubElo ani po zvýšení timeoutu.")
+    st.error("Nepodařilo se načíst data ani přes proxy.")
 
 # --- HOKEJ ---
 st.markdown("---")
@@ -199,7 +166,6 @@ st.header("🏒 NHL")
 @st.cache_data(ttl=3600)
 def get_nhl_data():
     try:
-        # Statistiky
         r_stats = requests.get("https://api-web.nhle.com/v1/standings/now", timeout=10).json()
         stats = {}
         for t in r_stats['standings']:
@@ -208,7 +174,6 @@ def get_nhl_data():
                 "GA": t['goalAgainst']/t['gamesPlayed']
             }
         
-        # Rozpis
         today = datetime.now().strftime("%Y-%m-%d")
         r_sch = requests.get(f"https://api-web.nhle.com/v1/schedule/{today}", timeout=10).json()
         
@@ -223,7 +188,6 @@ def get_nhl_data():
                     xg_h = (stats[h]['GF'] * stats[a]['GA']) / avg_gf * 1.05
                     xg_a = (stats[a]['GF'] * stats[h]['GA']) / avg_gf
                     
-                    # Poisson Moneyline
                     max_g = 10
                     matrix = np.zeros((max_g, max_g))
                     for i in range(max_g):
