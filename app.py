@@ -1,4 +1,4 @@
-).import streamlit as st
+import streamlit as st
 import pandas as pd
 import requests
 import numpy as np
@@ -9,7 +9,10 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Fotmob Pro v38", layout="wide")
 
-# ==============================================================================\n# 1. KONFIGURACE A VESTAVĚNÁ DATA (ZÁCHRANA)\n# ==============================================================================\n
+# ==============================================================================
+# 1. KONFIGURACE A VESTAVĚNÁ DATA (ZÁCHRANA)
+# ==============================================================================
+
 # Pokud API selže, použijeme tuto databázi pro manuální kalkulačku
 INTERNAL_DB = {
     "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Man City": 2050, "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Liverpool": 2000, "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Arsenal": 1980,
@@ -30,7 +33,10 @@ LEAGUES_ID = {
     "🇪🇺 Liga Mistrů": 42, "🇪🇺 Evropská Liga": 73
 }
 
-# ==============================================================================\n# 2. NOVÉ API VOLÁNÍ (PRODUKČNÍ ENDPOINT)\n# ==============================================================================\n
+# ==============================================================================
+# 2. NOVÉ API VOLÁNÍ (PRODUKČNÍ ENDPOINT)
+# ==============================================================================
+
 @st.cache_data(ttl=300)
 def get_fotmob_data(date_str):
     # POUŽÍVÁME NOVÝ ENDPOINT (pub.fotmob.com)
@@ -74,10 +80,6 @@ def parse_fotmob(json_data, league_filter_id):
                     live_time = status.get("liveTime", "Live")
                     score_str = f"{live_time} | {score_str}"
                 
-                # Hledání xG (pokud je v datech)
-                # Fotmob v přehledu xG často nemá, museli bychom do detailu
-                # Ale zkusíme najít "reason" pro predikci
-                
                 matches.append({
                     "Liga": f"{ccode} {league_name}",
                     "Čas": m_time,
@@ -89,7 +91,10 @@ def parse_fotmob(json_data, league_filter_id):
             except: continue
     return matches
 
-# ==============================================================================\n# 3. MATEMATICKÝ MODEL (POISSON)\n# ==============================================================================\n
+# ==============================================================================
+# 3. MATEMATICKÝ MODEL (POISSON)
+# ==============================================================================
+
 def calculate_prediction(elo_h, elo_a):
     elo_diff = elo_h - elo_a + 100 # Domácí výhoda
     
@@ -120,7 +125,10 @@ def calculate_prediction(elo_h, elo_a):
         "Matrix": matrix
     }
 
-# ==============================================================================\n# 4. UI APLIKACE\n# ==============================================================================\n
+# ==============================================================================
+# 4. UI APLIKACE
+# ==============================================================================
+
 st.title("⚡ Fotmob Pro Analyst")
 
 # TABS
