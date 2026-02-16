@@ -7,9 +7,6 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Pro Football Analyst", layout="wide")
 
-# ==============================================================================
-# 1. KONFIGURACE LIG
-# ==============================================================================
 LEAGUES = {
     "🇬🇧 Premier League": "PL",
     "🇬🇧 Championship": "ELC",
@@ -23,9 +20,6 @@ LEAGUES = {
     "🇧🇷 Série A (Brazílie)": "BSA"
 }
 
-# ==============================================================================
-# 2. API FUNKCE
-# ==============================================================================
 def get_headers(api_key):
     return {'X-Auth-Token': api_key}
 
@@ -36,8 +30,7 @@ def get_standings(api_key, code):
         r = requests.get(url, headers=get_headers(api_key))
         if r.status_code != 200:
             return None
-        data = r.json()
-        return data['standings'][0]['table']
+        return r.json()['standings'][0]['table']
     except:
         return None
 
@@ -50,14 +43,10 @@ def get_matches(api_key, code):
         r = requests.get(url, headers=get_headers(api_key))
         if r.status_code != 200:
             return None
-        data = r.json()
-        return data['matches']
+        return r.json()['matches']
     except:
         return None
 
-# ==============================================================================
-# 3. MATEMATICKÝ MODEL
-# ==============================================================================
 def calculate_team_stats(standings):
     if not standings:
         return None, 0
@@ -88,4 +77,9 @@ def calculate_team_stats(standings):
         stats[t_id]["def_strength"] = stats[t_id]["ga_avg"] / league_avg if league_avg > 0 else 1
     return stats, league_avg
 
-def predict_match(home_id,
+def predict_match(home_id, away_id, stats, league_avg):
+    if home_id not in stats or away_id not in stats:
+        return None
+    h = stats[home_id]
+    a = stats[away_id]
+    xg_h = h["att_strength"] * a["def_strength"] * league_avg * 1.
