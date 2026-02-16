@@ -1,4 +1,4 @@
-).import streamlit as st
+import streamlit as st
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
@@ -9,7 +9,10 @@ import random
 
 st.set_page_config(page_title="PredictZ Proxy Hunter", layout="wide")
 
-# ==============================================================================\n# 1. SCRAPING ENGINE (PŘES PROXY)\n# ==============================================================================\n
+# ==============================================================================
+# 1. SCRAPING ENGINE (PŘES PROXY)
+# ==============================================================================
+
 @st.cache_data(ttl=1800)
 def scrape_predictz_proxy(day="today"):
     # 1. Cílová adresa
@@ -119,7 +122,10 @@ def scrape_predictz_proxy(day="today"):
     except Exception as e:
         return None, str(e)
 
-# ==============================================================================\n# 2. UI APLIKACE\n# ==============================================================================\n
+# ==============================================================================
+# 2. UI APLIKACE
+# ==============================================================================
+
 st.title("🌍 Global Football Predictor")
 st.caption("Zdroj: PredictZ (přes Proxy Tunel)")
 
