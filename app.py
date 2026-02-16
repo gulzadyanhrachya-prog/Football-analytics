@@ -7,13 +7,260 @@ import requests
 import io
 import urllib.parse
 
-st.set_page_config(page_title="Betting Auto-Pilot v28 (Tank)", layout="wide")
+st.set_page_config(page_title="Betting Auto-Pilot v28", layout="wide")
 
-# ==============================================================================\n# 1. ROBUSTNÍ NAČÍTÁNÍ DAT (S Fallbackem)\n# ==============================================================================\n\n@st.cache_data(ttl=3600)\ndef get_football_data_robust():\n    # URL adresy\n    url_direct = "http://api.clubelo.com/Fixtures"\n    url_proxy_1 = f"https://api.allorigins.win/get?url={urllib.parse.quote(url_direct)}"\n    url_proxy_2 = f"https://corsproxy.io/?{url_direct}"\n    \n    df = None\n    status = "Nenačteno"\n\n    # 1. POKUS: Proxy AllOrigins\n    try:\n        r = requests.get(url_proxy_1, timeout=10)\n        data = r.json()\n        content = data.get("contents")\n        if content:\n            df = pd.read_csv(io.StringIO(content))\n            status = "✅ AllOrigins Proxy"\n    except: pass\n\n    # 2. POKUS: Proxy CorsProxy (pokud 1. selže)\n    if df is None:\n        try:\n            r = requests.get(url_proxy_2, timeout=10)\n            if r.status_code == 200:\n                df = pd.read_csv(io.StringIO(r.text))\n                status = "✅ CorsProxy"\n        except: pass\n\n    # 3. POKUS: Přímo (pokud proxy selžou)\n    if df is None:\n        try:\n            df = pd.read_csv(url_direct)\n            status = "✅ Direct Connection"\n        except: pass\n\n    # 4. POKUS: NOUZOVÝ REŽIM (Aby aplikace nespadla)\n    if df is None:\n        status = "⚠️ NOUZOVÝ REŽIM (Demo Data)"\n        # Vytvoříme fiktivní data, aby uživatel viděl alespoň UI\n        dnes = datetime.now()\n        data = {\n            "Date": [dnes.strftime("%Y-%m-%d"), (dnes+timedelta(days=1)).strftime("%Y-%m-%d")],\n            "Country": ["DEMO", "DEMO"],\n            "Home": ["Manchester City", "Real Madrid"],\n            "Away": ["Luton Town", "Barcelona"],\n            "EloHome": [2050, 1950],\n            "EloAway": [1600, 1940]\n        }\n        df = pd.DataFrame(data)\n\n    # Zpracování data\n    try:\n        df['DateObj'] = pd.to_datetime(df['Date'])\n    except:\n        pass\n        \n    return df, status\n\n# ==============================================================================\n# 2. MATEMATICKÉ MODELY\n# ==============================================================================\n\ndef calculate_probs(elo_h, elo_a):\n    # Výhra (Elo)\n    elo_diff = elo_h - elo_a + 100 # Domácí výhoda\n    prob_h_win = 1 / (10**(-elo_diff/400) + 1)\n    prob_a_win = 1 - prob_h_win\n    \n    # Korekce na remízu\n    prob_draw = 0.25 \n    if abs(prob_h_win - 0.5) < 0.1: prob_draw = 0.30 \n    \n    real_h = prob_h_win * (1 - prob_draw)\n    real_a = prob_a_win * (1 - prob_draw)\n    \n    # Góly (Poisson)\n    exp_xg_h = max(0.5, 1.45 + (elo_diff / 500))\n    exp_xg_a = max(0.5, 1.15 - (elo_diff / 500))\n    \n    max_g = 6\n    matrix = np.zeros((max_g, max_g))\n    for i in range(max_g):\n        for j in range(max_g):\n            matrix[i, j] = poisson.pmf(i, exp_xg_h) * poisson.pmf(j, exp_xg_a)\n            \n    prob_over_25 = 0\n    prob_btts = 0\n    for i in range(max_g):\n        for j in range(max_g):\n            if i + j > 2.5: prob_over_25 += matrix[i, j]\n            if i > 0 and j > 0: prob_btts += matrix[i, j]\n            \n    return {\n        "1": real_h, "0": prob_draw, "2": real_a,\n        "Over 2.5": prob_over_25, "Under 2.5": 1 - prob_over_25,\n        "BTTS Yes": prob_btts, "BTTS No": 1 - prob_btts\n    }\n\ndef pick_best_bet(probs):\n    candidates = [\n        ("Výhra Domácích (1)", probs["1"]),\n        ("Výhra Hostů (2)", probs["2"]),\n        ("Over 2.5 Gólů", probs["Over 2.5"]),\n        ("Under 2.5 Gólů", 1 - probs["Over 2.5"]),\n        ("Oba dají gól (BTTS)", probs["BTTS Yes"])\n    ]\n    prob_10 = probs["1"] + probs["0"]\n    prob_02 = probs["2"] + probs["0"]\n    \n    candidates.sort(key=lambda x: x[1], reverse=True)\n    best_bet = candidates[0]\n    \n    if best_bet[1] < 0.55: \n        if prob_10 > prob_02: return "Neprohra Domácích (10)", prob_10\n        else: return "Neprohra Hostů (02)", prob_02\n            \n    return best_bet[0], best_bet[1]\n\n# ==============================================================================\n# 3. UI APLIKACE\n# ==============================================================================\n\nst.title("🤖 Betting Auto-Pilot (The Tank)")\n\n# --- FOTBAL ---\nst.header("⚽ Fotbal")\n\nwith st.spinner("Navazuji spojení se servery..."):\n    df_fix, status_msg = get_football_data_robust()\n\n# Zobrazení stavu připojení (pro diagnostiku)\nif "NOUZOVÝ" in status_msg:\n    st.warning(f"Stav připojení: {status_msg}")\n    st.caption("Server ClubElo neodpovídá. Zobrazuji ukázková data, aby aplikace běžela.")\nelse:\n    st.success(f"Stav připojení: {status_msg}")\n\nif df_fix is not None:\n    dnes = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)\n    limit = dnes + timedelta(days=4) \n    \n    # Filtr data\n    mask = (df_fix['DateObj'] >= dnes) & (df_fix['DateObj'] <= limit)\n    upcoming = df_fix[mask].copy()\n    \n    if upcoming.empty:\n        st.info("Žádné zápasy v nejbližších dnech (nebo konec sezóny).")\n    else:\n        results = []\n        progress_bar = st.progress(0)\n        total_rows = len(upcoming)\n        \n        for i, (idx, row) in enumerate(upcoming.iterrows()):\n            if i % 10 == 0: progress_bar.progress(min(i / total_rows, 1.0))\n            \n            try:\n                home, away = row['Home'], row['Away']\n                elo_h = row.get('EloHome')\n                elo_a = row.get('EloAway')\n                \n                if pd.isna(elo_h) or pd.isna(elo_a): continue\n\n                probs = calculate_probs(elo_h, elo_a)\n                bet_name, confidence = pick_best_bet(probs)\n                fair_odd = 1 / confidence if confidence > 0 else 0\n                \n                results.append({\n                    "Datum": row['DateObj'].strftime("%d.%m. %H:%M"),\n                    "Soutěž": row.get('Country', 'EU'),\n                    "Zápas": f"{home} vs {away}",\n                    "DOPORUČENÁ SÁZKA": bet_name,\n                    "Důvěra": confidence * 100,\n                    "Férový kurz": fair_odd\n                })\n            except: continue\n        \n        progress_bar.empty()\n        \n        df_res = pd.DataFrame(results)\n        if not df_res.empty:\n            st.subheader("🔥 TOP FOTBALOVÉ TUTOVKY")\n            tutovky = df_res[df_res["Důvěra"] >= 65].sort_values(by="Důvěra", ascending=False)\n            if not tutovky.empty:\n                st.dataframe(tutovky.style.format({"Důvěra": "{:.1f} %", "Férový kurz": "{:.2f}"}), hide_index=True, use_container_width=True)\n            else: st.info("Žádné tutovky nad 65%.")\n            \n            st.subheader("💡 VŠECHNY TIPY (Seřazeno)")\n            st.dataframe(df_res.sort_values(by="Důvěra", ascending=False).style.format({"Důvěra": "{:.1f} %", "Férový kurz": "{:.2f}"}), hide_index=True, use_container_width=True)\n        else: st.warning("Nepodařilo se vypočítat predikce.")\n\n# --- HOKEJ ---\nst.markdown("---")\nst.header("🏒 NHL")\n\n@st.cache_data(ttl=3600)\ndef get_nhl_data():\n    try:\n        # Statistiky\n        r_stats = requests.get("https://api-web.nhle.com/v1/standings/now", timeout=10).json()\n        stats = {}\n        for t in r_stats['standings']:\n            stats[t['teamAbbrev']['default']] = {\n                "GF": t['goalFor']/t['gamesPlayed'],\n                "GA": t['goalAgainst']/t['gamesPlayed']\n            }\n        \n        # Rozpis\n        today = datetime.now().strftime("%Y-%m-%d")\n        r_sch = requests.get(f"https://api-web.nhle.com/v1/schedule/{today}", timeout=10).json()\n        \n        matches = []\n        avg_gf = 3.0\n        \n        for day in r_sch['gameWeek']:\n            for game in day['games']:\n                h = game['homeTeam']['abbrev']\n                a = game['awayTeam']['abbrev']\n                if h in stats and a in stats:\n                    xg_h = (stats[h]['GF'] * stats[a]['GA']) / avg_gf * 1.05\n                    xg_a = (stats[a]['GF'] * stats[h]['GA']) / avg_gf\n                    \n                    # Poisson Moneyline\n                    max_g = 10\n                    matrix = np.zeros((max_g, max_g))\n                    for i in range(max_g):\n                        for j in range(max_g):\n                            matrix[i, j] = poisson.pmf(i, xg_h) * poisson.pmf(j, xg_a)\n                    \n                    prob_h = np.sum(np.tril(matrix, -1)) + (np.sum(np.diag(matrix)) * 0.5)\n                    prob_a = np.sum(np.triu(matrix, 1)) + (np.sum(np.diag(matrix)) * 0.5)\n                    \n                    tip = f"Výhra {h}" if prob_h > prob_a else f"Výhra {a}"\n                    conf = max(prob_h, prob_a)\n                    \n                    matches.append({\n                        "Datum": day['date'],\n                        "Zápas": f"{h} vs {a}",\n                        "Tip": tip,\n                        "Důvěra": conf * 100,\n                        "Férový kurz": 1/conf\n                    })\n        return matches\n    except: return []\n\nmatches = get_nhl_data()\nif matches:\n    df = pd.DataFrame(matches).sort_values(by="Důvěra", ascending=False)\n    st.dataframe(df.style.format({"Důvěra": "{:.1f} %", "Férový kurz": "{:.2f}"}), hide_index=True, use_container_width=True)\nelse:\n    st.warning("Žádné zápasy NHL.")\n```
+# ==============================================================================
+# 1. ROBUSTNÍ NAČÍTÁNÍ DAT (S Fallbackem)
+# ==============================================================================
 
-### Co teď uvidíš?
-1.  **Zelená hláška:** "✅ AllOrigins Proxy" nebo "✅ CorsProxy" -> Znamená to, že se podařilo stáhnout reálná data.
-2.  **Žlutá hláška:** "⚠️ NOUZOVÝ REŽIM" -> Znamená to, že všechna připojení selhala, ale aplikace **nespadla**. Uvidíš tam 2 testovací zápasy (Man City, Real Madrid), abys viděl, že logika funguje.
-3.  **NHL:** Mělo by fungovat normálně (pokud se hraje).
+@st.cache_data(ttl=3600)
+def get_football_data_robust():
+    # URL adresy
+    url_direct = "http://api.clubelo.com/Fixtures"
+    url_proxy_1 = f"https://api.allorigins.win/get?url={urllib.parse.quote(url_direct)}"
+    url_proxy_2 = f"https://corsproxy.io/?{url_direct}"
+    
+    df = None
+    status = "Nenačteno"
 
-Tohle je nejstabilnější verze, jakou můžeme na free cloudu mít.
+    # 1. POKUS: Proxy AllOrigins
+    try:
+        r = requests.get(url_proxy_1, timeout=10)
+        data = r.json()
+        content = data.get("contents")
+        if content:
+            df = pd.read_csv(io.StringIO(content))
+            status = "✅ AllOrigins Proxy"
+    except: pass
+
+    # 2. POKUS: Proxy CorsProxy (pokud 1. selže)
+    if df is None:
+        try:
+            r = requests.get(url_proxy_2, timeout=10)
+            if r.status_code == 200:
+                df = pd.read_csv(io.StringIO(r.text))
+                status = "✅ CorsProxy"
+        except: pass
+
+    # 3. POKUS: Přímo (pokud proxy selžou)
+    if df is None:
+        try:
+            df = pd.read_csv(url_direct)
+            status = "✅ Direct Connection"
+        except: pass
+
+    # 4. POKUS: NOUZOVÝ REŽIM (Aby aplikace nespadla)
+    if df is None:
+        status = "⚠️ NOUZOVÝ REŽIM (Demo Data)"
+        # Vytvoříme fiktivní data, aby uživatel viděl alespoň UI
+        dnes = datetime.now()
+        data = {
+            "Date": [dnes.strftime("%Y-%m-%d"), (dnes+timedelta(days=1)).strftime("%Y-%m-%d")],
+            "Country": ["DEMO", "DEMO"],
+            "Home": ["Manchester City", "Real Madrid"],
+            "Away": ["Luton Town", "Barcelona"],
+            "EloHome": [2050, 1950],
+            "EloAway": [1600, 1940]
+        }
+        df = pd.DataFrame(data)
+
+    # Zpracování data
+    try:
+        df['DateObj'] = pd.to_datetime(df['Date'])
+    except:
+        pass
+        
+    return df, status
+
+# ==============================================================================
+# 2. MATEMATICKÉ MODELY
+# ==============================================================================
+
+def calculate_probs(elo_h, elo_a):
+    # Výhra (Elo)
+    elo_diff = elo_h - elo_a + 100 # Domácí výhoda
+    prob_h_win = 1 / (10**(-elo_diff/400) + 1)
+    prob_a_win = 1 - prob_h_win
+    
+    # Korekce na remízu
+    prob_draw = 0.25 
+    if abs(prob_h_win - 0.5) < 0.1: prob_draw = 0.30 
+    
+    real_h = prob_h_win * (1 - prob_draw)
+    real_a = prob_a_win * (1 - prob_draw)
+    
+    # Góly (Poisson)
+    exp_xg_h = max(0.5, 1.45 + (elo_diff / 500))
+    exp_xg_a = max(0.5, 1.15 - (elo_diff / 500))
+    
+    max_g = 6
+    matrix = np.zeros((max_g, max_g))
+    for i in range(max_g):
+        for j in range(max_g):
+            matrix[i, j] = poisson.pmf(i, exp_xg_h) * poisson.pmf(j, exp_xg_a)
+            
+    prob_over_25 = 0
+    prob_btts = 0
+    for i in range(max_g):
+        for j in range(max_g):
+            if i + j > 2.5: prob_over_25 += matrix[i, j]
+            if i > 0 and j > 0: prob_btts += matrix[i, j]
+            
+    return {
+        "1": real_h, "0": prob_draw, "2": real_a,
+        "Over 2.5": prob_over_25, "Under 2.5": 1 - prob_over_25,
+        "BTTS Yes": prob_btts, "BTTS No": 1 - prob_btts
+    }
+
+def pick_best_bet(probs):
+    candidates = [
+        ("Výhra Domácích (1)", probs["1"]),
+        ("Výhra Hostů (2)", probs["2"]),
+        ("Over 2.5 Gólů", probs["Over 2.5"]),
+        ("Under 2.5 Gólů", 1 - probs["Over 2.5"]),
+        ("Oba dají gól (BTTS)", probs["BTTS Yes"])
+    ]
+    prob_10 = probs["1"] + probs["0"]
+    prob_02 = probs["2"] + probs["0"]
+    
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    best_bet = candidates[0]
+    
+    if best_bet[1] < 0.55: 
+        if prob_10 > prob_02: return "Neprohra Domácích (10)", prob_10
+        else: return "Neprohra Hostů (02)", prob_02
+            
+    return best_bet[0], best_bet[1]
+
+# ==============================================================================
+# 3. UI APLIKACE
+# ==============================================================================
+
+st.title("🤖 Betting Auto-Pilot (The Tank)")
+
+# --- FOTBAL ---
+st.header("⚽ Fotbal")
+
+with st.spinner("Navazuji spojení se servery..."):
+    df_fix, status_msg = get_football_data_robust()
+
+# Zobrazení stavu připojení (pro diagnostiku)
+if "NOUZOVÝ" in status_msg:
+    st.warning(f"Stav připojení: {status_msg}")
+    st.caption("Server ClubElo neodpovídá. Zobrazuji ukázková data, aby aplikace běžela.")
+else:
+    st.success(f"Stav připojení: {status_msg}")
+
+if df_fix is not None:
+    dnes = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    limit = dnes + timedelta(days=4) 
+    
+    # Filtr data
+    mask = (df_fix['DateObj'] >= dnes) & (df_fix['DateObj'] <= limit)
+    upcoming = df_fix[mask].copy()
+    
+    if upcoming.empty:
+        st.info("Žádné zápasy v nejbližších dnech (nebo konec sezóny).")
+    else:
+        results = []
+        progress_bar = st.progress(0)
+        total_rows = len(upcoming)
+        
+        for i, (idx, row) in enumerate(upcoming.iterrows()):
+            if i % 10 == 0: progress_bar.progress(min(i / total_rows, 1.0))
+            
+            try:
+                home, away = row['Home'], row['Away']
+                elo_h = row.get('EloHome')
+                elo_a = row.get('EloAway')
+                
+                if pd.isna(elo_h) or pd.isna(elo_a): continue
+
+                probs = calculate_probs(elo_h, elo_a)
+                bet_name, confidence = pick_best_bet(probs)
+                fair_odd = 1 / confidence if confidence > 0 else 0
+                
+                results.append({
+                    "Datum": row['DateObj'].strftime("%d.%m. %H:%M"),
+                    "Soutěž": row.get('Country', 'EU'),
+                    "Zápas": f"{home} vs {away}",
+                    "DOPORUČENÁ SÁZKA": bet_name,
+                    "Důvěra": confidence * 100,
+                    "Férový kurz": fair_odd
+                })
+            except: continue
+        
+        progress_bar.empty()
+        
+        df_res = pd.DataFrame(results)
+        if not df_res.empty:
+            st.subheader("🔥 TOP FOTBALOVÉ TUTOVKY")
+            tutovky = df_res[df_res["Důvěra"] >= 65].sort_values(by="Důvěra", ascending=False)
+            if not tutovky.empty:
+                st.dataframe(tutovky.style.format({"Důvěra": "{:.1f} %", "Férový kurz": "{:.2f}"}), hide_index=True, use_container_width=True)
+            else: st.info("Žádné tutovky nad 65%.")
+            
+            st.subheader("💡 VŠECHNY TIPY (Seřazeno)")
+            st.dataframe(df_res.sort_values(by="Důvěra", ascending=False).style.format({"Důvěra": "{:.1f} %", "Férový kurz": "{:.2f}"}), hide_index=True, use_container_width=True)
+        else: st.warning("Nepodařilo se vypočítat predikce.")
+
+# --- HOKEJ ---
+st.markdown("---")
+st.header("🏒 NHL")
+
+@st.cache_data(ttl=3600)
+def get_nhl_data():
+    try:
+        # Statistiky
+        r_stats = requests.get("https://api-web.nhle.com/v1/standings/now", timeout=10).json()
+        stats = {}
+        for t in r_stats['standings']:
+            stats[t['teamAbbrev']['default']] = {
+                "GF": t['goalFor']/t['gamesPlayed'],
+                "GA": t['goalAgainst']/t['gamesPlayed']
+            }
+        
+        # Rozpis
+        today = datetime.now().strftime("%Y-%m-%d")
+        r_sch = requests.get(f"https://api-web.nhle.com/v1/schedule/{today}", timeout=10).json()
+        
+        matches = []
+        avg_gf = 3.0
+        
+        for day in r_sch['gameWeek']:
+            for game in day['games']:
+                h = game['homeTeam']['abbrev']
+                a = game['awayTeam']['abbrev']
+                if h in stats and a in stats:
+                    xg_h = (stats[h]['GF'] * stats[a]['GA']) / avg_gf * 1.05
+                    xg_a = (stats[a]['GF'] * stats[h]['GA']) / avg_gf
+                    
+                    # Poisson Moneyline
+                    max_g = 10
+                    matrix = np.zeros((max_g, max_g))
+                    for i in range(max_g):
+                        for j in range(max_g):
+                            matrix[i, j] = poisson.pmf(i, xg_h) * poisson.pmf(j, xg_a)
+                    
+                    prob_h = np.sum(np.tril(matrix, -1)) + (np.sum(np.diag(matrix)) * 0.5)
+                    prob_a = np.sum(np.triu(matrix, 1)) + (np.sum(np.diag(matrix)) * 0.5)
+                    
+                    tip = f"Výhra {h}" if prob_h > prob_a else f"Výhra {a}"
+                    conf = max(prob_h, prob_a)
+                    
+                    matches.append({
+                        "Datum": day['date'],
+                        "Zápas": f"{h} vs {a}",
+                        "Tip": tip,
+                        "Důvěra": conf * 100,
+                        "Férový kurz": 1/conf
+                    })
+        return matches
+    except: return []
+
+matches = get_nhl_data()
+if matches:
+    df = pd.DataFrame(matches).sort_values(by="Důvěra", ascending=False)
+    st.dataframe(df.style.format({"Důvěra": "{:.1f} %", "Férový kurz": "{:.2f}"}), hide_index=True, use_container_width=True)
+else:
+    st.warning("Žádné zápasy NHL.")
