@@ -1,217 +1,270 @@
 import streamlit as st
 import pandas as pd
+import requests
 import numpy as np
 from scipy.stats import poisson
-import matplotlib.pyplot as plt
-import seaborn as sns
-import requests
+from datetime import datetime
 
-st.set_page_config(page_title="Betting Fortress v39", layout="wide")
+st.set_page_config(page_title="League Master Analyst", layout="wide")
 
-# ==============================================================================
-# 1. INTERNÍ DATABÁZE ELO (ZÁCHRANA)
-# ==============================================================================
-# Toto zajišťuje, že aplikace funguje i bez API.
-# Hodnoty jsou přibližné Elo ratingy k roku 2025.
-
-INTERNAL_DB = {
-    # ANGLIE
-    "Man City": 2050, "Liverpool": 2000, "Arsenal": 1980, "Chelsea": 1850, 
-    "Man Utd": 1820, "Tottenham": 1830, "Aston Villa": 1800, "Newcastle": 1780,
-    "West Ham": 1750, "Brighton": 1740, "Everton": 1700, "Fulham": 1680,
-    # ŠPANĚLSKO
-    "Real Madrid": 1990, "Barcelona": 1950, "Atletico Madrid": 1880, "Girona": 1790,
-    "Real Sociedad": 1780, "Bilbao": 1770, "Betis": 1750, "Sevilla": 1740,
-    # NĚMECKO
-    "Bayern Munich": 1960, "Leverkusen": 1920, "Dortmund": 1850, "RB Leipzig": 1840,
-    "Stuttgart": 1780, "Frankfurt": 1750, "Wolfsburg": 1700,
-    # ITÁLIE
-    "Inter": 1940, "Juventus": 1860, "AC Milan": 1850, "Atalanta": 1840,
-    "Napoli": 1820, "Roma": 1790, "Lazio": 1780, "Fiorentina": 1750,
-    # FRANCIE
-    "PSG": 1880, "Monaco": 1780, "Lille": 1760, "Lens": 1700, "Marseille": 1750,
-    # OSTATNÍ EVROPA
-    "Benfica": 1810, "Sporting CP": 1800, "Porto": 1790, "Braga": 1750,
-    "PSV": 1800, "Feyenoord": 1780, "Ajax": 1750, "AZ Alkmaar": 1700,
-    "Sparta Praha": 1680, "Slavia Praha": 1690, "Plzeň": 1620, "Baník Ostrava": 1500,
-    "Galatasaray": 1720, "Fenerbahce": 1710, "Besiktas": 1680,
-    "Celtic": 1650, "Rangers": 1640, "Salzburg": 1600,
-    "Copenhagen": 1600, "Midtjylland": 1580,
-    "Olympiacos": 1650, "PAOK": 1640, "AEK": 1630
+# ==============================================================================\n# 1. KONFIGURACE LIG (FOTMOB ID)\n# ==============================================================================\n# Toto jsou ID, která používá Fotmob. Jsou velmi stabilní.\n
+LEAGUES = {
+    "🇬🇧 Premier League (Anglie)": 47,
+    "🇬🇧 Championship (Anglie 2)": 48,
+    "🇪🇸 La Liga (Španělsko)": 87,
+    "🇩🇪 Bundesliga (Německo)": 54,
+    "🇮🇹 Serie A (Itálie)": 55,
+    "🇫🇷 Ligue 1 (Francie)": 53,
+    "🇨🇿 Fortuna Liga (Česko)": 66,
+    "🇵🇱 Ekstraklasa (Polsko)": 69,
+    "🇵🇹 Liga Portugal (Portugalsko)": 61,
+    "🇳🇱 Eredivisie (Holandsko)": 57,
+    "🇹🇷 Super Lig (Turecko)": 71,
+    "🇩🇰 Superliga (Dánsko)": 70,
+    "🇬🇷 Super League (Řecko)": 72,
+    "🇷🇴 Liga 1 (Rumunsko)": 116,
+    "🇮🇱 Ligat Ha'Al (Izrael)": 122,
+    "🇧🇬 First League (Bulharsko)": 113,
+    "🇦🇹 Bundesliga (Rakousko)": 60,
+    "🇨🇭 Super League (Švýcarsko)": 59,
+    "🇧🇪 Pro League (Belgie)": 50,
+    "🇺🇸 MLS (USA)": 130,
+    "🇪🇺 Liga Mistrů": 42,
+    "🇪🇺 Evropská Liga": 73
 }
 
-# ==============================================================================
-# 2. MATEMATICKÉ MODELY (POISSON)
-# ==============================================================================
+# ==============================================================================\n# 2. STAHOVÁNÍ DAT (FOTMOB LEAGUE ENDPOINT)\n# ==============================================================================\n
+@st.cache_data(ttl=3600)
+def get_league_data(league_id):
+    # Tento endpoint vrací tabulku I nadcházející zápasy v jednom JSONu
+    url = f"https://www.fotmob.com/api/leagues?id={league_id}&tab=overview"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code != 200: return None, f"Chyba {r.status_code}"
+        return r.json(), None
+    except Exception as e:
+        return None, str(e)
 
-def calculate_prediction(elo_h, elo_a):
-    # 1. Výpočet pravděpodobnosti výhry z Elo
-    elo_diff = elo_h - elo_a + 100 # Domácí výhoda
+# ==============================================================================\n# 3. ANALYTICKÉ MODELY (POISSON)\n# ==============================================================================\n
+def process_table_stats(json_data):
+    """Vytáhne z JSONu tabulku a vypočítá sílu útoku/obrany pro každý tým."""
+    if not json_data or "table" not in json_data: return None, 0
     
-    # 2. Odhad xG (Očekávané góly)
-    # Průměrný tým má xG cca 1.35. Silnější tým více.
-    exp_xg_h = max(0.2, 1.45 + (elo_diff / 500))
-    exp_xg_a = max(0.2, 1.15 - (elo_diff / 500))
+    # Fotmob má tabulku často vnořenou v "data" -> "table" -> "all"
+    try:
+        # Struktura se může lišit podle typu ligy (skupiny vs tabulka)
+        table_data = json_data["table"][0]["data"]["table"]["all"]
+    except:
+        return None, 0
+
+    stats = {}
+    total_goals = 0
+    total_games = 0
     
-    # 3. Poissonova simulace (Matice skóre)
+    for row in table_data:
+        team_id = row["id"]
+        name = row["name"]
+        played = row["played"]
+        gf = int(row["scoresStr"].split("-")[0])
+        ga = int(row["scoresStr"].split("-")[1])
+        pts = row["pts"]
+        
+        if played > 0:
+            stats[team_id] = {
+                "name": name,
+                "gf_avg": gf / played,
+                "ga_avg": ga / played,
+                "points": pts
+            }
+            total_goals += gf
+            total_games += played
+            
+    if total_games == 0: return None, 0
+    
+    league_avg = total_goals / total_games
+    
+    # Normalizace síly
+    for tid, data in stats.items():
+        data["att"] = data["gf_avg"] / league_avg
+        data["def"] = data["ga_avg"] / league_avg
+        
+    return stats, league_avg
+
+def calculate_probabilities(home_id, away_id, stats, league_avg):
+    """Vypočítá pravděpodobnosti pro všechny trhy."""
+    if home_id not in stats or away_id not in stats: return None
+    
+    h = stats[home_id]
+    a = stats[away_id]
+    
+    # xG Model
+    # Domácí xG = Domácí Útok * Hostující Obrana * Průměr Ligy * Výhoda Domácích
+    xg_h = h["att"] * a["def"] * league_avg * 1.15
+    xg_a = a["att"] * h["def"] * league_avg
+    
+    # Poisson
     max_g = 6
     matrix = np.zeros((max_g, max_g))
     for i in range(max_g):
         for j in range(max_g):
-            matrix[i, j] = poisson.pmf(i, exp_xg_h) * poisson.pmf(j, exp_xg_a)
+            matrix[i, j] = poisson.pmf(i, xg_h) * poisson.pmf(j, xg_a)
             
-    # 4. Sumarizace pravděpodobností
-    prob_h = np.sum(np.tril(matrix, -1))
-    prob_d = np.sum(np.diag(matrix))
-    prob_a = np.sum(np.triu(matrix, 1))
+    # Trhy
+    prob_1 = np.sum(np.tril(matrix, -1))
+    prob_0 = np.sum(np.diag(matrix))
+    prob_2 = np.sum(np.triu(matrix, 1))
     
-    # 5. Odvozené sázky
-    prob_over_25 = 0
+    prob_over_15 = 0; prob_over_25 = 0; prob_over_35 = 0
     prob_btts = 0
+    
     for i in range(max_g):
         for j in range(max_g):
-            if i + j > 2.5: prob_over_25 += matrix[i, j]
-            if i > 0 and j > 0: prob_btts += matrix[i, j]
+            total = i + j
+            p = matrix[i, j]
+            if total > 1.5: prob_over_15 += p
+            if total > 2.5: prob_over_25 += p
+            if total > 3.5: prob_over_35 += p
+            if i > 0 and j > 0: prob_btts += p
             
     return {
-        "1": prob_h, "0": prob_d, "2": prob_a,
-        "Over 2.5": prob_over_25, "BTTS": prob_btts,
-        "xG_H": exp_xg_h, "xG_A": exp_xg_a,
-        "Matrix": matrix
+        "1": prob_1, "0": prob_0, "2": prob_2,
+        "10": prob_1 + prob_0, "02": prob_2 + prob_0,
+        "Over 1.5": prob_over_15, "Over 2.5": prob_over_25, "Over 3.5": prob_over_35,
+        "BTTS": prob_btts,
+        "xG_H": xg_h, "xG_A": xg_a,
+        "Home": h["name"], "Away": a["name"]
     }
 
-# ==============================================================================
-# 3. API FUNKCE (TheSportsDB - Best Effort)
-# ==============================================================================
+# ==============================================================================\n# 4. UI APLIKACE\n# ==============================================================================\n
+st.title("⚽ League Master Analyst")
+st.caption("Analýza budoucích zápasů na základě aktuální formy a tabulky.")
 
-@st.cache_data(ttl=3600)
-def get_live_schedule(league_id):
-    # Použijeme TheSportsDB (Next 15 events)
-    url = f"https://www.thesportsdb.com/api/v1/json/3/eventsnextleague.php?id={league_id}"
-    try:
-        r = requests.get(url, timeout=5)
-        if r.status_code == 200:
-            return r.json().get("events", [])
-        return []
-    except: return []
+# --- VÝBĚR LIGY ---
+selected_league = st.selectbox("Vyber ligu:", list(LEAGUES.keys()))
+league_id = LEAGUES[selected_league]
 
-# ==============================================================================
-# 4. UI APLIKACE
-# ==============================================================================
+with st.spinner("Stahuji data z Fotmobu..."):
+    data, err = get_league_data(league_id)
 
-st.title("🏰 Betting Fortress (Analytik)")
-
-# TABS
-tab_calc, tab_live = st.tabs(["🧮 Nezničitelná Kalkulačka", "📅 Live Rozpis (Beta)"])
-
-# --- TAB 1: KALKULAČKA (VŽDY FUNKČNÍ) ---
-with tab_calc:
-    st.header("Manuální Analýza")
-    st.caption("Vyber dva týmy z databáze a získej okamžitou predikci.")
+if err:
+    st.error(f"Chyba API: {err}")
+elif not data:
+    st.warning("Data nejsou k dispozici.")
+else:
+    # 1. Zpracování statistik
+    stats_db, league_avg = process_table_stats(data)
     
-    col_sel1, col_sel2 = st.columns(2)
-    teams_sorted = sorted(list(INTERNAL_DB.keys()))
-    
-    with col_sel1:
-        home = st.selectbox("Domácí tým:", teams_sorted, index=teams_sorted.index("Sparta Praha") if "Sparta Praha" in teams_sorted else 0)
-    with col_sel2:
-        away = st.selectbox("Hostující tým:", teams_sorted, index=teams_sorted.index("Slavia Praha") if "Slavia Praha" in teams_sorted else 1)
-        
-    if st.button("🔮 Vypočítat Predikci", type="primary"):
-        elo_h = INTERNAL_DB[home]
-        elo_a = INTERNAL_DB[away]
-        
-        res = calculate_prediction(elo_h, elo_a)
-        
-        # Hlavní karta
-        st.markdown("---")
-        c1, c2, c3 = st.columns(3)
-        
-        # Určení favorita
-        best_prob = max(res['1'], res['0'], res['2'])
-        if res['1'] == best_prob: 
-            tip_text = f"Výhra {home}"; tip_color = "green"
-        elif res['2'] == best_prob: 
-            tip_text = f"Výhra {away}"; tip_color = "red"
-        else: 
-            tip_text = "Remíza"; tip_color = "orange"
+    if not stats_db:
+        st.warning("Nepodařilo se načíst tabulku (možná začátek sezóny nebo pohárový systém).")
+    else:
+        # 2. Získání budoucích zápasů
+        # Fotmob vrací "matches" -> "allMatches" nebo "nextMatches"
+        matches_raw = []
+        if "matches" in data and "allMatches" in data["matches"]:
+            matches_raw = data["matches"]["allMatches"]
+        elif "nextMatches" in data:
+            matches_raw = data["nextMatches"]
             
-        with c1:
-            st.markdown(f"### Tip: :{tip_color}[{tip_text}]")
-            st.caption(f"Důvěra: {best_prob*100:.1f}%")
-            
-        with c2:
-            st.metric("Férový kurz", f"{1/best_prob:.2f}")
-            
-        with c3:
-            st.metric("Očekávané góly (xG)", f"{res['xG_H']:.2f} : {res['xG_A']:.2f}")
-            
-        # Detailní trhy
-        st.subheader("💰 Sázkové příležitosti")
-        d1, d2, d3, d4 = st.columns(4)
-        d1.metric("1 (Domácí)", f"{res['1']*100:.0f}%", f"Kurz: {1/res['1']:.2f}")
-        d2.metric("0 (Remíza)", f"{res['0']*100:.0f}%", f"Kurz: {1/res['0']:.2f}")
-        d3.metric("2 (Hosté)", f"{res['2']*100:.0f}%", f"Kurz: {1/res['2']:.2f}")
-        d4.metric("Over 2.5", f"{res['Over 2.5']*100:.0f}%", f"Kurz: {1/res['Over 2.5']:.2f}")
+        # Filtrujeme jen budoucí zápasy (ty, co nemají výsledek)
+        future_matches = [m for m in matches_raw if not m["status"]["finished"] and not m["status"]["cancelled"]]
         
-        # Heatmapa
-        with st.expander("Zobrazit pravděpodobnost přesného výsledku"):
-            fig, ax = plt.subplots(figsize=(6, 3))
-            sns.heatmap(res['Matrix'], annot=True, fmt=".1%", cmap="YlGnBu", ax=ax)
-            ax.set_xlabel(away); ax.set_ylabel(home)
-            st.pyplot(fig)
-
-# --- TAB 2: LIVE ROZPIS (POKUS O API) ---
-with tab_live:
-    st.header("Live Rozpis (TheSportsDB)")
-    st.caption("Pokusí se stáhnout nadcházející zápasy. Pokud data chybí, použij Kalkulačku.")
-    
-    LEAGUES_TSDB = {
-        "🇬🇧 Premier League": "4328", "🇪🇸 La Liga": "4335", "🇩🇪 Bundesliga": "4331",
-        "🇮🇹 Serie A": "4332", "🇫🇷 Ligue 1": "4334", "🇨🇿 Fortuna Liga": "4352",
-        "🇵🇱 Ekstraklasa": "4353", "🇺🇸 MLS": "4346", "🇪🇺 Liga Mistrů": "4480"
-    }
-    
-    sel_league = st.selectbox("Vyber ligu:", list(LEAGUES_TSDB.keys()))
-    
-    if st.button("Stáhnout rozpis"):
-        events = get_live_schedule(LEAGUES_TSDB[sel_league])
+        # Seřadíme podle času
+        # Fotmob time je string nebo timestamp, musíme opatrně
+        # Pro jednoduchost bereme tak, jak jsou (obvykle jsou seřazené)
         
-        if not events:
-            st.warning("API nevrátilo žádné zápasy pro tuto ligu (mimo sezónu nebo chyba API).")
+        if not future_matches:
+            st.info("V této lize nejsou naplánovány žádné další zápasy.")
         else:
-            st.success(f"Nalezeno {len(events)} zápasů.")
+            st.success(f"Analyzováno {len(future_matches)} nadcházejících zápasů.")
             
-            for e in events:
-                home_team = e['strHomeTeam']
-                away_team = e['strAwayTeam']
-                date = e['dateEvent']
-                
-                # Zkusíme najít týmy v naší DB (Fuzzy match)
-                elo_h = 1500 # Default
-                elo_a = 1500
-                found_h = False
-                found_a = False
-                
-                for db_name, db_elo in INTERNAL_DB.items():
-                    # Jednoduché porovnání částí názvu
-                    if db_name.split(" ")[-1] in home_team: 
-                        elo_h = db_elo; found_h = True
-                    if db_name.split(" ")[-1] in away_team: 
-                        elo_a = db_elo; found_a = True
-                
-                # Výpočet
-                res = calculate_prediction(elo_h, elo_a)
-                
-                with st.container():
-                    c1, c2, c3 = st.columns([1, 3, 2])
-                    with c1: st.write(date)
-                    with c2: st.write(f"**{home_team}** vs **{away_team}**")
-                    with c3:
-                        if found_h and found_a:
-                            if res['1'] > 0.55: st.success(f"Tip: {home_team}")
-                            elif res['2'] > 0.55: st.error(f"Tip: {away_team}")
-                            else: st.warning("Vyrovnané")
-                        else:
-                            st.caption("Neznámá síla týmů")
-                st.markdown("---")
+            # --- FILTRY ---
+            with st.expander("🛠️ Filtrování sázek", expanded=True):
+                c_f1, c_f2 = st.columns(2)
+                with c_f1:
+                    min_conf = st.slider("Minimální pravděpodobnost (%):", 50, 90, 60)
+                with c_f2:
+                    bet_type = st.selectbox("Typ sázky:", ["Vše", "Výhra (1/2)", "Góly (Over)", "BTTS"])
+            
+            # --- VÝPIS ZÁPASŮ ---
+            for m in future_matches[:20]: # Limit 20 zápasů
+                try:
+                    home_id = m["home"]["id"]
+                    away_id = m["away"]["id"]
+                    time_str = m["status"].get("utcTime") # Timestamp
+                    
+                    # Převod času
+                    if time_str:
+                        dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+                        date_display = dt.strftime("%d.%m. %H:%M")
+                    else:
+                        date_display = "Neznámý čas"
+
+                    # Výpočet
+                    res = calculate_probabilities(home_id, away_id, stats_db, league_avg)
+                    
+                    if not res: continue # Chybí data o týmu
+                    
+                    # Logika doporučení
+                    tips = []
+                    
+                    # 1. Výhra
+                    if res["1"] * 100 >= min_conf: tips.append((f"Výhra {res['Home']}", res["1"], "green"))
+                    elif res["2"] * 100 >= min_conf: tips.append((f"Výhra {res['Away']}", res["2"], "red"))
+                    
+                    # 2. Góly
+                    if res["Over 2.5"] * 100 >= min_conf: tips.append(("Over 2.5 Gólů", res["Over 2.5"], "blue"))
+                    
+                    # 3. BTTS
+                    if res["BTTS"] * 100 >= min_conf: tips.append(("BTTS (Oba dají)", res["BTTS"], "orange"))
+                    
+                    # 4. Dvojitá šance (pokud není čistá výhra)
+                    if not tips and res["10"] * 100 >= min_conf + 10: tips.append((f"Neprohra {res['Home']}", res["10"], "gray"))
+                    if not tips and res["02"] * 100 >= min_conf + 10: tips.append((f"Neprohra {res['Away']}", res["02"], "gray"))
+
+                    # Filtr zobrazení
+                    if bet_type == "Výhra (1/2)" and not any("Výhra" in t[0] for t in tips): continue
+                    if bet_type == "Góly (Over)" and not any("Over" in t[0] for t in tips): continue
+                    if bet_type == "BTTS" and not any("BTTS" in t[0] for t in tips): continue
+                    
+                    # Pokud nemáme silný tip a je nastaven vysoký filtr, přeskočíme
+                    if not tips and min_conf > 50: continue
+
+                    # VYKRESLENÍ KARTY
+                    with st.container():
+                        c1, c2, c3, c4 = st.columns([2, 3, 2, 2])
+                        
+                        with c1:
+                            st.write(f"**{date_display}**")
+                            
+                        with c2:
+                            st.write(f"**{res['Home']}**")
+                            st.write(f"**{res['Away']}**")
+                            
+                        with c3:
+                            if tips:
+                                best_tip = max(tips, key=lambda x: x[1])
+                                st.markdown(f"#### :{best_tip[2]}[{best_tip[0]}]")
+                                st.caption(f"Důvěra: {int(best_tip[1]*100)}%")
+                            else:
+                                st.write("Bez silného signálu")
+                                
+                        with c4:
+                            with st.popover("Detailní analýza"):
+                                st.write("**Pravděpodobnosti:**")
+                                st.write(f"1: {int(res['1']*100)}% | X: {int(res['0']*100)}% | 2: {int(res['2']*100)}%")
+                                st.write("**Góly:**")
+                                st.write(f"Over 2.5: {int(res['Over 2.5']*100)}%")
+                                st.write(f"BTTS: {int(res['BTTS']*100)}%")
+                                st.write("**xG Model:**")
+                                st.write(f"{res['xG_H']:.2f} : {res['xG_A']:.2f}")
+                                st.write(f"Férový kurz (Tip): {1/best_tip[1]:.2f}" if tips else "")
+
+                        st.markdown("---")
+                        
+                except Exception as e:
+                    continue
